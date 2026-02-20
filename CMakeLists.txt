@@ -140,6 +140,8 @@ target_link_libraries(peimon_async_runtime PUBLIC
 )
 if(WIN32)
     target_link_libraries(peimon_async_runtime PUBLIC ws2_32)
+    # Static nghttp2 (vcpkg default): avoid __declspec(dllimport) so symbols link correctly
+    target_compile_definitions(peimon_async_runtime PRIVATE NGHTTP2_STATICLIB)
 endif()
 if(PEIMON_BUILD_HTTP3)
     target_link_libraries(peimon_async_runtime PUBLIC

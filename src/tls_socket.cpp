@@ -5,6 +5,7 @@
 #include <cstdint>
 #ifdef _WIN32
 #define NGHTTP2_NO_SSIZE_T
+#define NGHTTP2_STATICLIB
 #endif
 #include <nghttp2/nghttp2.h>
 #include <cerrno>
@@ -15,6 +16,7 @@ namespace peimon {
 
 namespace {
 
+// Use explicit variables (no structured bindings) for MSVC compatibility.
 // ALPN select callback: choose "h2" or "http/1.1" and store choice in SSL app data.
 // Non-null app data => h2 was selected; null => http/1.1.
 int alpn_select_cb(SSL* ssl, const unsigned char** out, unsigned char* outlen,
