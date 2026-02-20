@@ -73,13 +73,17 @@ jobs:
         shell: pwsh
         working-directory: ${{ github.workspace }}
 
+      - name: Install vcpkg dependencies (manifest)
+        run: .\vcpkg\vcpkg install --triplet x64-windows
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+
       - name: Configure
         run: |
-          $env:CMAKE_TOOLCHAIN_FILE = "${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake"
-          $env:VCPKG_TARGET_TRIPLET = "x64-windows"
+          $vcpkgToolchain = "${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake"
           cmake -B build -S . `
             -G "${{ env.CMAKE_GENERATOR }}" -A x64 `
-            -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DCMAKE_TOOLCHAIN_FILE="$vcpkgToolchain" `
             -DVCPKG_TARGET_TRIPLET=x64-windows
         shell: pwsh
         working-directory: ${{ github.workspace }}
