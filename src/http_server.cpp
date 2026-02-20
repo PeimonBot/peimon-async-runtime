@@ -173,12 +173,21 @@ static int h2_on_frame_recv(nghttp2_session* session, const nghttp2_frame* frame
     if (!resp_body.empty()) {
         ud->stream_bodies[frame->hd.stream_id].body = std::move(resp_body);
         ud->stream_bodies[frame->hd.stream_id].offset = 0;
+#ifdef NGHTTP2_NO_SSIZE_T
+        nghttp2_data_provider2 prd;
+        prd.source.ptr = &ud->stream_bodies[frame->hd.stream_id];
+        prd.read_callback = h2_data_read_cb;
+        nghttp2_submit_response2(session, frame->hd.stream_id, nva, 2, &prd);
+    } else {
+        nghttp2_submit_response2(session, frame->hd.stream_id, nva, 2, nullptr);
+#else
         nghttp2_data_provider prd;
         prd.source.ptr = &ud->stream_bodies[frame->hd.stream_id];
         prd.read_callback = h2_data_read_cb;
         nghttp2_submit_response(session, frame->hd.stream_id, nva, 2, &prd);
     } else {
         nghttp2_submit_response(session, frame->hd.stream_id, nva, 2, nullptr);
+#endif
     }
     return 0;
 }
