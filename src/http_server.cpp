@@ -159,12 +159,12 @@ static int h2_on_frame_recv(nghttp2_session* session, const nghttp2_frame* frame
     if (!resp_body.empty()) {
         ud->stream_bodies[frame->hd.stream_id].body = std::move(resp_body);
         ud->stream_bodies[frame->hd.stream_id].offset = 0;
-        nghttp2_data_provider2 prd;
+        nghttp2_data_provider prd;
         prd.source.ptr = &ud->stream_bodies[frame->hd.stream_id];
         prd.read_callback = h2_data_read_cb;
-        nghttp2_submit_response2(session, frame->hd.stream_id, nva, 2, &prd);
+        nghttp2_submit_response(session, frame->hd.stream_id, nva, 2, &prd);
     } else {
-        nghttp2_submit_response2(session, frame->hd.stream_id, nva, 2, nullptr);
+        nghttp2_submit_response(session, frame->hd.stream_id, nva, 2, nullptr);
     }
     return 0;
 }
@@ -233,12 +233,12 @@ Task<void> handle_h2_connection(EventLoop& loop, TlsSocket socket, const HttpHan
 
     nghttp2_session_callbacks* cbs = nullptr;
     if (nghttp2_session_callbacks_new(&cbs) != 0) { socket.close(); co_return; }
-    nghttp2_session_callbacks_set_send_callback2(cbs, h2_send_cb);
+    nghttp2_session_callbacks_set_send_callback(cbs, h2_send_cb);
     nghttp2_session_callbacks_set_on_header_callback(cbs, h2_on_header);
     nghttp2_session_callbacks_set_on_frame_recv_callback(cbs, h2_on_frame_recv);
 
     nghttp2_session* session = nullptr;
-    if (nghttp2_session_server_new2(&session, cbs, &ud, nullptr) != 0) {
+    if (nghttp2_session_server_new(&session, cbs, &ud) != 0) {
         nghttp2_session_callbacks_del(cbs);
         socket.close();
         co_return;

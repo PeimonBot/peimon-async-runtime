@@ -40,7 +40,7 @@ poll_fd_t create_udp_socket() {
     return static_cast<poll_fd_t>(s);
 #else
     int fd = ::socket(AF_INET,
-#if defined(SOCK_CLOEXEC)
+#if defined(SOCK_CLOEXEC) && !defined(__APPLE__)
                       SOCK_DGRAM | SOCK_CLOEXEC,
 #else
                       SOCK_DGRAM,
@@ -48,7 +48,7 @@ poll_fd_t create_udp_socket() {
                       0);
     if (fd < 0)
         throw std::runtime_error(std::string("socket: ") + std::strerror(errno));
-#if !defined(SOCK_CLOEXEC)
+#if !defined(SOCK_CLOEXEC) || defined(__APPLE__)
     {
         int flags = ::fcntl(fd, F_GETFD, 0);
         if (flags >= 0) ::fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
