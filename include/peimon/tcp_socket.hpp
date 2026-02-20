@@ -7,28 +7,33 @@
 #include <memory>
 #include <optional>
 #include <system_error>
-#include <arpa/inet.h>
 #include <cerrno>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 namespace peimon {
 
 class TcpSocket {
 public:
-    TcpSocket() : fd_(-1), loop_(nullptr) {}
-    explicit TcpSocket(int fd, EventLoop* loop = nullptr) : fd_(fd), loop_(loop) {}
+    TcpSocket() : fd_(static_cast<poll_fd_t>(-1)), loop_(nullptr) {}
+    explicit TcpSocket(poll_fd_t fd, EventLoop* loop = nullptr) : fd_(fd), loop_(loop) {}
 
     TcpSocket(TcpSocket&& other) noexcept
-        : fd_(std::exchange(other.fd_, -1))
+        : fd_(std::exchange(other.fd_, static_cast<poll_fd_t>(-1)))
         , loop_(std::exchange(other.loop_, nullptr)) {}
 
     TcpSocket& operator=(TcpSocket&& other) noexcept {
         if (this != &other) {
             close();
-            fd_ = std::exchange(other.fd_, -1);
+            fd_ = std::exchange(other.fd_, static_cast<poll_fd_t>(-1));
             loop_ = std::exchange(other.loop_, nullptr);
         }
         return *this;
@@ -39,15 +44,19 @@ public:
     TcpSocket(const TcpSocket&) = delete;
     TcpSocket& operator=(const TcpSocket&) = delete;
 
-    int fd() const { return fd_; }
-    bool is_open() const { return fd_ >= 0; }
+    poll_fd_t fd() const { return fd_; }
+    bool is_open() const { return fd_ != static_cast<poll_fd_t>(-1); }
     void set_event_loop(EventLoop* loop) { loop_ = loop; }
 
     void close() {
-        if (fd_ >= 0) {
+        if (fd_ != static_cast<poll_fd_t>(-1)) {
             if (loop_) loop_->unregister_fd(fd_);
-            ::close(fd_);
-            fd_ = -1;
+#ifdef _WIN32
+            closesocket(static_cast<SOCKET>(fd_));
+#else
+            ::close(static_cast<int>(fd_));
+#endif
+            fd_ = static_cast<poll_fd_t>(-1);
             loop_ = nullptr;
         }
     }
@@ -62,24 +71,24 @@ public:
     AsyncWriteAwaitable async_write(EventLoop& loop, const void* buf, std::size_t len);
 
 private:
-    int fd_;
+    poll_fd_t fd_;
     EventLoop* loop_;
 };
 
 class TcpListener {
 public:
-    TcpListener() : fd_(-1), loop_(nullptr) {}
+    TcpListener() : fd_(static_cast<poll_fd_t>(-1)), loop_(nullptr) {}
     ~TcpListener() { close(); }
 
     TcpListener(const TcpListener&) = delete;
     TcpListener& operator=(const TcpListener&) = delete;
     TcpListener(TcpListener&& other) noexcept
-        : fd_(std::exchange(other.fd_, -1))
+        : fd_(std::exchange(other.fd_, static_cast<poll_fd_t>(-1)))
         , loop_(std::exchange(other.loop_, nullptr)) {}
     TcpListener& operator=(TcpListener&& other) noexcept {
         if (this != &other) {
             close();
-            fd_ = std::exchange(other.fd_, -1);
+            fd_ = std::exchange(other.fd_, static_cast<poll_fd_t>(-1));
             loop_ = std::exchange(other.loop_, nullptr);
         }
         return *this;
@@ -89,14 +98,14 @@ public:
     void listen(int backlog = 128);
     void close();
 
-    int fd() const { return fd_; }
-    bool is_open() const { return fd_ >= 0; }
+    poll_fd_t fd() const { return fd_; }
+    bool is_open() const { return fd_ != static_cast<poll_fd_t>(-1); }
 
     class AsyncAcceptAwaitable;
     AsyncAcceptAwaitable async_accept(EventLoop& loop);
 
 private:
-    int fd_;
+    poll_fd_t fd_;
     EventLoop* loop_{nullptr};
 };
 
@@ -106,7 +115,7 @@ public:
     AsyncAcceptAwaitable(TcpListener& listener, EventLoop& loop)
         : listener_(&listener), loop_(&loop) {}
 
-    bool await_ready() const noexcept { return !listener_ || listener_->fd() < 0; }
+    bool await_ready() const noexcept { return !listener_ || listener_->fd() == static_cast<poll_fd_t>(-1); }
 
     void await_suspend(std::coroutine_handle<> h) {
         state_ = std::make_shared<State>();
@@ -115,12 +124,21 @@ public:
         state_->listener_fd = listener_->fd();
         state_->callback = [s = state_]() {
             s->loop->unregister_fd(s->listener_fd);
-            int client_fd = ::accept(s->listener_fd, nullptr, nullptr);
+#ifdef _WIN32
+            SOCKET client_s = accept(static_cast<SOCKET>(s->listener_fd), nullptr, nullptr);
+            if (client_s != INVALID_SOCKET) {
+                u_long nonblock = 1;
+                ioctlsocket(client_s, FIONBIO, &nonblock);
+                s->result.emplace(static_cast<poll_fd_t>(client_s), s->loop);
+            }
+#else
+            int client_fd = ::accept(static_cast<int>(s->listener_fd), nullptr, nullptr);
             if (client_fd >= 0) {
                 int flags = ::fcntl(client_fd, F_GETFL, 0);
                 if (flags >= 0) ::fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
-                s->result.emplace(client_fd, s->loop);
+                s->result.emplace(static_cast<poll_fd_t>(client_fd), s->loop);
             }
+#endif
             s->handle.resume();
         };
         loop_->register_fd(listener_->fd(), PollEvent::Read, &state_->callback);
@@ -128,14 +146,14 @@ public:
 
     TcpSocket await_resume() {
         if (state_ && state_->result) return std::move(*state_->result);
-        return TcpSocket(-1, nullptr);
+        return TcpSocket(static_cast<poll_fd_t>(-1), nullptr);
     }
 
 private:
     struct State {
         std::coroutine_handle<> handle;
         EventLoop* loop{nullptr};
-        int listener_fd{-1};
+        poll_fd_t listener_fd{static_cast<poll_fd_t>(-1)};
         std::optional<TcpSocket> result;
         EventLoop::Callback callback;
     };
@@ -166,7 +184,19 @@ public:
             loop_->queue_in_loop([h]() mutable { h.resume(); });
             return;
         }
-        int ret = ::connect(socket_->fd(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+#ifdef _WIN32
+        int ret = connect(static_cast<SOCKET>(socket_->fd()), reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+        if (ret == 0) {
+            loop_->queue_in_loop([h]() mutable { h.resume(); });
+            return;
+        }
+        if (WSAGetLastError() != WSAEWOULDBLOCK) {
+            ec_ = std::error_code(WSAGetLastError(), std::system_category());
+            loop_->queue_in_loop([h]() mutable { h.resume(); });
+            return;
+        }
+#else
+        int ret = ::connect(static_cast<int>(socket_->fd()), reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
         if (ret == 0) {
             loop_->queue_in_loop([h]() mutable { h.resume(); });
             return;
@@ -176,17 +206,26 @@ public:
             loop_->queue_in_loop([h]() mutable { h.resume(); });
             return;
         }
+#endif
         state_ = std::make_shared<State>();
         state_->handle = h;
         state_->loop = loop_;
         state_->fd = socket_->fd();
         state_->callback = [s = state_]() {
             s->loop->unregister_fd(s->fd);
+#ifdef _WIN32
             int err = 0;
-            socklen_t len = sizeof(err);
-            if (getsockopt(s->fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0 && err != 0) {
+            int len = sizeof(err);
+            if (getsockopt(static_cast<SOCKET>(s->fd), SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&err), &len) == 0 && err != 0) {
                 s->ec = std::error_code(err, std::system_category());
             }
+#else
+            int err = 0;
+            socklen_t len = sizeof(err);
+            if (getsockopt(static_cast<int>(s->fd), SOL_SOCKET, SO_ERROR, &err, &len) == 0 && err != 0) {
+                s->ec = std::error_code(err, std::system_category());
+            }
+#endif
             s->handle.resume();
         };
         loop_->register_fd(socket_->fd(), PollEvent::Write, &state_->callback);
@@ -201,7 +240,7 @@ private:
     struct State {
         std::coroutine_handle<> handle;
         EventLoop* loop{nullptr};
-        int fd{-1};
+        poll_fd_t fd{static_cast<poll_fd_t>(-1)};
         std::error_code ec;
         EventLoop::Callback callback;
     };
@@ -235,8 +274,15 @@ public:
         state_->len = len_;
         state_->callback = [s = state_]() {
             s->loop->unregister_fd(s->fd);
-            s->result = ::read(s->fd, s->buf, s->len);
-            if (s->result < 0) s->ec = std::error_code(errno, std::system_category());
+#ifdef _WIN32
+            int n = recv(static_cast<SOCKET>(s->fd), static_cast<char*>(s->buf), static_cast<int>(s->len), 0);
+            s->result = n;
+            if (n < 0) s->ec = std::error_code(WSAGetLastError(), std::system_category());
+#else
+            ssize_t n = ::read(static_cast<int>(s->fd), s->buf, s->len);
+            s->result = static_cast<std::ptrdiff_t>(n);
+            if (n < 0) s->ec = std::error_code(errno, std::system_category());
+#endif
             s->handle.resume();
         };
         loop_->register_fd(socket_->fd(), PollEvent::Read, &state_->callback);
@@ -249,10 +295,10 @@ private:
     struct State {
         std::coroutine_handle<> handle;
         EventLoop* loop{nullptr};
-        int fd{-1};
+        poll_fd_t fd{static_cast<poll_fd_t>(-1)};
         void* buf{nullptr};
         std::size_t len{0};
-        ssize_t result{0};
+        std::ptrdiff_t result{0};
         std::error_code ec;
         EventLoop::Callback callback;
     };
@@ -285,8 +331,15 @@ public:
         state_->len = len_;
         state_->callback = [s = state_]() {
             s->loop->unregister_fd(s->fd);
-            s->result = ::write(s->fd, s->buf, s->len);
-            if (s->result < 0) s->ec = std::error_code(errno, std::system_category());
+#ifdef _WIN32
+            int n = send(static_cast<SOCKET>(s->fd), static_cast<const char*>(s->buf), static_cast<int>(s->len), 0);
+            s->result = n;
+            if (n < 0) s->ec = std::error_code(WSAGetLastError(), std::system_category());
+#else
+            ssize_t n = ::write(static_cast<int>(s->fd), s->buf, s->len);
+            s->result = static_cast<std::ptrdiff_t>(n);
+            if (n < 0) s->ec = std::error_code(errno, std::system_category());
+#endif
             s->handle.resume();
         };
         loop_->register_fd(socket_->fd(), PollEvent::Write, &state_->callback);
@@ -299,10 +352,10 @@ private:
     struct State {
         std::coroutine_handle<> handle;
         EventLoop* loop{nullptr};
-        int fd{-1};
+        poll_fd_t fd{static_cast<poll_fd_t>(-1)};
         const void* buf{nullptr};
         std::size_t len{0};
-        ssize_t result{0};
+        std::ptrdiff_t result{0};
         std::error_code ec;
         EventLoop::Callback callback;
     };

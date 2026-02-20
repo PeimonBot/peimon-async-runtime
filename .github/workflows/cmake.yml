@@ -50,3 +50,42 @@ jobs:
       - name: Run minimal test
         run: |
           ./build/test_loop_minimal
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Clone vcpkg
+        run: git clone https://github.com/microsoft/vcpkg.git vcpkg
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+
+      - name: Bootstrap vcpkg
+        run: .\vcpkg\bootstrap-vcpkg.bat
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+
+      - name: Install dependencies
+        run: .\vcpkg\vcpkg install openssl:x64-windows nghttp2:x64-windows
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+
+      - name: Configure
+        run: |
+          cmake -B build -S . `
+            -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+
+      - name: Build
+        run: cmake --build build --config Release
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+
+      - name: Run minimal test
+        run: .\build\Release\test_loop_minimal.exe
+        shell: pwsh
+        working-directory: ${{ github.workspace }}

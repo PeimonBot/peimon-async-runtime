@@ -61,7 +61,7 @@ public:
     TlsSocket(const TlsSocket&) = delete;
     TlsSocket& operator=(const TlsSocket&) = delete;
 
-    int fd() const { return socket_.fd(); }
+    poll_fd_t fd() const { return socket_.fd(); }
     bool is_open() const { return socket_.is_open() && ssl_; }
     void close();
 

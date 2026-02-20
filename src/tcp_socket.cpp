@@ -1,58 +1,101 @@
 #include "peimon/tcp_socket.hpp"
 #include <stdexcept>
 #include <cstring>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <fcntl.h>
 #include <unistd.h>
+#endif
 
 namespace peimon {
 
 namespace {
 
-int create_tcp_socket() {
+poll_fd_t create_tcp_socket() {
+#ifdef _WIN32
+    SOCKET s = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
+    if (s == INVALID_SOCKET) {
+        throw std::runtime_error("WSASocket failed");
+    }
+    u_long nonblock = 1;
+    if (ioctlsocket(s, FIONBIO, &nonblock) != 0) {
+        closesocket(s);
+        throw std::runtime_error("ioctlsocket FIONBIO failed");
+    }
+    return static_cast<poll_fd_t>(s);
+#else
     int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) {
         throw std::runtime_error(std::string("socket: ") + std::strerror(errno));
     }
     int flags = ::fcntl(fd, F_GETFL, 0);
     if (flags >= 0) ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    return fd;
+    return static_cast<poll_fd_t>(fd);
+#endif
 }
 
 }  // namespace
 
 void TcpListener::bind(const char* host, std::uint16_t port) {
-    if (fd_ >= 0) return;
+    if (fd_ != static_cast<poll_fd_t>(-1)) return;
     fd_ = create_tcp_socket();
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
-    if (::inet_pton(AF_INET, host, &addr.sin_addr) <= 0) {
-        ::close(fd_);
-        fd_ = -1;
+    if (inet_pton(AF_INET, host, &addr.sin_addr) <= 0) {
+#ifdef _WIN32
+        closesocket(static_cast<SOCKET>(fd_));
+#else
+        ::close(static_cast<int>(fd_));
+#endif
+        fd_ = static_cast<poll_fd_t>(-1);
         throw std::runtime_error("inet_pton failed");
     }
     int one = 1;
-    ::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-    if (::bind(fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+#ifdef _WIN32
+    setsockopt(static_cast<SOCKET>(fd_), SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&one), sizeof(one));
+    if (::bind(static_cast<SOCKET>(fd_), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+        int e = WSAGetLastError();
+        closesocket(static_cast<SOCKET>(fd_));
+        fd_ = static_cast<poll_fd_t>(-1);
+        throw std::runtime_error(std::string("bind failed: ") + std::to_string(e));
+    }
+#else
+    ::setsockopt(static_cast<int>(fd_), SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    if (::bind(static_cast<int>(fd_), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
         int e = errno;
-        ::close(fd_);
-        fd_ = -1;
+        ::close(static_cast<int>(fd_));
+        fd_ = static_cast<poll_fd_t>(-1);
         throw std::runtime_error(std::string("bind: ") + std::strerror(e));
     }
+#endif
 }
 
 void TcpListener::listen(int backlog) {
-    if (fd_ < 0) return;
-    if (::listen(fd_, backlog) < 0) {
+    if (fd_ == static_cast<poll_fd_t>(-1)) return;
+#ifdef _WIN32
+    if (::listen(static_cast<SOCKET>(fd_), backlog) != 0) {
+        throw std::runtime_error("listen failed");
+    }
+#else
+    if (::listen(static_cast<int>(fd_), backlog) < 0) {
         throw std::runtime_error(std::string("listen: ") + std::strerror(errno));
     }
+#endif
 }
 
 void TcpListener::close() {
-    if (fd_ >= 0) {
+    if (fd_ != static_cast<poll_fd_t>(-1)) {
         if (loop_) loop_->unregister_fd(fd_);
-        ::close(fd_);
-        fd_ = -1;
+#ifdef _WIN32
+        closesocket(static_cast<SOCKET>(fd_));
+#else
+        ::close(static_cast<int>(fd_));
+#endif
+        fd_ = static_cast<poll_fd_t>(-1);
         loop_ = nullptr;
     }
 }

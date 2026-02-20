@@ -1,26 +1,33 @@
 cmake_minimum_required(VERSION 3.20)
-project(peimon-async-runtime VERSION 0.1.0 LANGUAGES CXX DESCRIPTION "Async event loop (epoll/kqueue) and thread pool for Linux and macOS")
+project(peimon-async-runtime VERSION 0.1.0 LANGUAGES CXX DESCRIPTION "Async event loop (epoll/kqueue/IOCP) and thread pool for Linux, macOS, and Windows")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    message(FATAL_ERROR "peimon-async-runtime supports Linux (epoll) and macOS (kqueue). Got: ${CMAKE_SYSTEM_NAME}")
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    message(FATAL_ERROR "peimon-async-runtime supports Linux (epoll), macOS (kqueue), and Windows (IOCP). Got: ${CMAKE_SYSTEM_NAME}")
 endif()
 
-# Poller: epoll on Linux, kqueue on macOS
+# Poller: epoll on Linux, kqueue on macOS, IOCP on Windows
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(PEIMON_POLLER_SOURCES src/epoll_poller.cpp)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set(PEIMON_POLLER_SOURCES src/kqueue_poller.cpp)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(PEIMON_POLLER_SOURCES src/win_poller.cpp)
 endif()
 
-# OpenSSL
+# OpenSSL and nghttp2
 find_package(OpenSSL REQUIRED)
-# nghttp2 for HTTP/2 and ALPN selection
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(nghttp2 REQUIRED libnghttp2)
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    find_package(nghttp2 CONFIG REQUIRED)
+    set(nghttp2_TARGET "nghttp2::nghttp2")
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(nghttp2 REQUIRED libnghttp2)
+    set(nghttp2_TARGET "${nghttp2_LIBRARIES}")
+endif()
 
 # ngtcp2 and nghttp3 for QUIC/HTTP/3 (from third_party) — Linux only; shared libs may be absent (gitignored)
 set(PEIMON_BUILD_HTTP3 OFF)
@@ -59,13 +66,18 @@ target_include_directories(peimon_async_runtime
         $<INSTALL_INTERFACE:include>
 )
 target_link_libraries(peimon_async_runtime PUBLIC
-    OpenSSL::SSL OpenSSL::Crypto ${nghttp2_LIBRARIES}
+    OpenSSL::SSL OpenSSL::Crypto ${nghttp2_TARGET}
 )
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    target_link_libraries(peimon_async_runtime PUBLIC ws2_32)
+endif()
 if(PEIMON_BUILD_HTTP3)
     target_link_libraries(peimon_async_runtime PUBLIC
         ngtcp2::ngtcp2_crypto_ossl ngtcp2::ngtcp2 nghttp3::nghttp3)
 endif()
-target_include_directories(peimon_async_runtime PRIVATE ${nghttp2_INCLUDE_DIRS})
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    target_include_directories(peimon_async_runtime PRIVATE ${nghttp2_INCLUDE_DIRS})
+endif()
 
 # Self-signed cert for HTTPS demo (optional; run target generate_certs or create cert.pem/key.pem manually)
 add_custom_target(generate_certs

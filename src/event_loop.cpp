@@ -2,44 +2,69 @@
 #include "peimon/task.hpp"
 #include <mutex>
 #include <stdexcept>
+#include <fstream>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#else
 #include <unistd.h>
 #include <fcntl.h>
-#include <fstream>
+#endif
 
 namespace peimon {
 
 namespace {
 
-int create_wakeup_pair(int fds[2]) {
+#ifndef _WIN32
+int create_wakeup_pair(poll_fd_t fds[2]) {
 #if defined(__linux__)
-    return pipe2(fds, O_CLOEXEC);
+    int raw[2];
+    if (pipe2(raw, O_CLOEXEC) != 0) return -1;
+    fds[0] = raw[0];
+    fds[1] = raw[1];
+    return 0;
 #else
-    if (pipe(fds) != 0) return -1;
+    int raw[2];
+    if (pipe(raw) != 0) return -1;
     for (int i = 0; i < 2; ++i) {
-        int flags = fcntl(fds[i], F_GETFD);
-        if (flags < 0 || fcntl(fds[i], F_SETFD, flags | FD_CLOEXEC) != 0) {
-            close(fds[0]);
-            close(fds[1]);
+        int flags = fcntl(raw[i], F_GETFD);
+        if (flags < 0 || fcntl(raw[i], F_SETFD, flags | FD_CLOEXEC) != 0) {
+            close(raw[0]);
+            close(raw[1]);
             return -1;
         }
     }
+    fds[0] = raw[0];
+    fds[1] = raw[1];
     return 0;
 #endif
 }
+#endif
 
 }  // namespace
 
-EventLoop::EventLoop() : poller_(make_poller()) {
+EventLoop::EventLoop()
+    : poller_(make_poller(
+#ifdef _WIN32
+          static_cast<void*>(this)
+#else
+          nullptr
+#endif
+              )) {
+#ifndef _WIN32
     if (create_wakeup_pair(wakeup_fds_) < 0) {
         throw std::runtime_error("pipe for wakeup failed");
     }
     register_fd(wakeup_fds_[0], PollEvent::Read, this);
+#endif
 }
 
 EventLoop::~EventLoop() {
+#ifndef _WIN32
     unregister_fd(wakeup_fds_[0]);
-    if (wakeup_fds_[0] >= 0) close(wakeup_fds_[0]);
-    if (wakeup_fds_[1] >= 0) close(wakeup_fds_[1]);
+    if (wakeup_fds_[0] >= 0) close(static_cast<int>(wakeup_fds_[0]));
+    if (wakeup_fds_[1] >= 0) close(static_cast<int>(wakeup_fds_[1]));
+#endif
 }
 
 void EventLoop::run() {
@@ -54,7 +79,8 @@ void EventLoop::run() {
         ++iter;
         if (n < 0) break;
         for (const auto& e : events) {
-            if (e.user_data == this && e.fd == wakeup_fds_[0]) {
+            if (e.user_data == this &&
+                (e.fd == wakeup_fds_[0] || e.fd == static_cast<poll_fd_t>(-1))) {
                 handle_wakeup();
             } else if (e.user_data) {
                 auto* cb = static_cast<Callback*>(e.user_data);
@@ -97,14 +123,20 @@ void EventLoop::modify_fd(int fd, PollEvent events, void* user_data) {
 }
 
 void EventLoop::wakeup() {
+#ifdef _WIN32
+    poller_->wakeup();
+#else
     char c = 0;
-    ::write(wakeup_fds_[1], &c, 1);
+    ::write(static_cast<int>(wakeup_fds_[1]), &c, 1);
+#endif
 }
 
 void EventLoop::handle_wakeup() {
+#ifndef _WIN32
     char buf[256];
-    while (read(wakeup_fds_[0], buf, sizeof(buf)) > 0)
+    while (read(static_cast<int>(wakeup_fds_[0]), buf, sizeof(buf)) > 0)
         ;
+#endif
 }
 
 void EventLoop::do_pending_callbacks() {

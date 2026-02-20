@@ -313,7 +313,7 @@ Task<void> run_http_server(EventLoop& loop, HttpServerOptions options) {
                 client.close();
                 continue;
             }
-            SSL_set_fd(ssl, client.fd());
+            SSL_set_fd(ssl, static_cast<int>(client.fd()));
             TlsSocket tls(std::move(client), ssl);
             std::error_code err = co_await tls.async_handshake_server(loop);
             if (err) {

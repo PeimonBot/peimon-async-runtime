@@ -10,6 +10,13 @@
 
 namespace peimon {
 
+/// Platform handle for pollable I/O: int on Unix, intptr_t on Windows (holds SOCKET).
+#ifdef _WIN32
+using poll_fd_t = intptr_t;
+#else
+using poll_fd_t = int;
+#endif
+
 enum class PollEvent : std::uint32_t {
     None = 0,
     Read = 1 << 0,
@@ -26,7 +33,7 @@ inline PollEvent operator&(PollEvent a, PollEvent b) {
 }
 
 struct FdEvent {
-    int fd{-1};
+    poll_fd_t fd{static_cast<poll_fd_t>(-1)};
     PollEvent events{PollEvent::None};
     void* user_data{nullptr};
 };
@@ -34,13 +41,16 @@ struct FdEvent {
 class IPoller {
 public:
     virtual ~IPoller() = default;
-    virtual void add(int fd, PollEvent events, void* user_data) = 0;
-    virtual void modify(int fd, PollEvent events, void* user_data) = 0;
-    virtual void remove(int fd) = 0;
+    virtual void add(poll_fd_t fd, PollEvent events, void* user_data) = 0;
+    virtual void modify(poll_fd_t fd, PollEvent events, void* user_data) = 0;
+    virtual void remove(poll_fd_t fd) = 0;
     virtual int wait(std::vector<FdEvent>& out_events, int timeout_ms) = 0;
+    /// Wake the poller (e.g. from another thread). No-op on Unix (pipe used); posts to IOCP on Windows.
+    virtual void wakeup() {}
 };
 
-std::unique_ptr<IPoller> make_poller();
+/// On Windows, pass non-null \a wakeup_user_data so the poller can inject wakeup events (same as pipe on Unix).
+std::unique_ptr<IPoller> make_poller(void* wakeup_user_data = nullptr);
 
 class EventLoop {
 public:
@@ -59,9 +69,9 @@ public:
     void run_in_loop(Callback cb);
     void queue_in_loop(Callback cb);
 
-    void register_fd(int fd, PollEvent events, void* user_data);
-    void unregister_fd(int fd);
-    void modify_fd(int fd, PollEvent events, void* user_data);
+    void register_fd(poll_fd_t fd, PollEvent events, void* user_data);
+    void unregister_fd(poll_fd_t fd);
+    void modify_fd(poll_fd_t fd, PollEvent events, void* user_data);
 
     template <class Rep, class Period>
     void run_after(std::chrono::duration<Rep, Period> delay, Callback cb);
@@ -78,7 +88,7 @@ private:
     bool running_{false};
     std::vector<Callback> pending_callbacks_;
     std::mutex pending_mutex_;
-    int wakeup_fds_[2]{-1, -1};
+    poll_fd_t wakeup_fds_[2]{static_cast<poll_fd_t>(-1), static_cast<poll_fd_t>(-1)};
 
     using Clock = std::chrono::steady_clock;
     using TimePoint = Clock::time_point;

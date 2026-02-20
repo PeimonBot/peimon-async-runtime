@@ -19,7 +19,7 @@ public:
         if (kq_ >= 0) close(kq_);
     }
 
-    void add(int fd, PollEvent events, void* user_data) override {
+    void add(poll_fd_t fd, PollEvent events, void* user_data) override {
         struct kevent ev[2];
         int n = 0;
         if ((events & PollEvent::Read) != PollEvent::None) {
@@ -33,12 +33,12 @@ public:
         }
     }
 
-    void modify(int fd, PollEvent events, void* user_data) override {
+    void modify(poll_fd_t fd, PollEvent events, void* user_data) override {
         remove(fd);
         add(fd, events, user_data);
     }
 
-    void remove(int fd) override {
+    void remove(poll_fd_t fd) override {
         struct kevent ev[2];
         EV_SET(&ev[0], fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
         EV_SET(&ev[1], fd, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
@@ -59,7 +59,7 @@ public:
         out_events.reserve(static_cast<std::size_t>(n));
         for (int i = 0; i < n; ++i) {
             FdEvent e;
-            e.fd = static_cast<int>(events[i].ident);
+            e.fd = static_cast<poll_fd_t>(events[i].ident);
             e.events = PollEvent::None;
             if (events[i].filter == EVFILT_READ) e.events = e.events | PollEvent::Read;
             if (events[i].filter == EVFILT_WRITE) e.events = e.events | PollEvent::Write;
@@ -74,7 +74,7 @@ private:
     int kq_{-1};
 };
 
-std::unique_ptr<IPoller> make_poller() {
+std::unique_ptr<IPoller> make_poller(void* /*wakeup_user_data*/) {
     return std::make_unique<KqueuePoller>();
 }
 

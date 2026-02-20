@@ -7,8 +7,13 @@
 #include <memory>
 #include <system_error>
 #include <utility>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <sys/socket.h>
 #include <netinet/in.h>
+#endif
 
 namespace peimon {
 
@@ -23,16 +28,16 @@ struct UdpRecvResult {
 /// Provides awaitables for async recv_from and send_to (C++23).
 class UdpSocket {
 public:
-    UdpSocket() : fd_(-1), loop_(nullptr) {}
+    UdpSocket() : fd_(static_cast<poll_fd_t>(-1)), loop_(nullptr) {}
     ~UdpSocket() { close(); }
 
     UdpSocket(UdpSocket&& other) noexcept
-        : fd_(std::exchange(other.fd_, -1))
+        : fd_(std::exchange(other.fd_, static_cast<poll_fd_t>(-1)))
         , loop_(std::exchange(other.loop_, nullptr)) {}
     UdpSocket& operator=(UdpSocket&& other) noexcept {
         if (this != &other) {
             close();
-            fd_ = std::exchange(other.fd_, -1);
+            fd_ = std::exchange(other.fd_, static_cast<poll_fd_t>(-1));
             loop_ = std::exchange(other.loop_, nullptr);
         }
         return *this;
@@ -40,8 +45,8 @@ public:
     UdpSocket(const UdpSocket&) = delete;
     UdpSocket& operator=(const UdpSocket&) = delete;
 
-    int fd() const { return fd_; }
-    bool is_open() const { return fd_ >= 0; }
+    poll_fd_t fd() const { return fd_; }
+    bool is_open() const { return fd_ != static_cast<poll_fd_t>(-1); }
     void set_event_loop(EventLoop* loop) { loop_ = loop; }
 
     void bind(const char* host, std::uint16_t port);
@@ -61,7 +66,7 @@ public:
                                        const sockaddr* addr, socklen_t addrlen);
 
 private:
-    int fd_;
+    poll_fd_t fd_;
     EventLoop* loop_;
 };
 
@@ -82,10 +87,16 @@ public:
         state_->len = len_;
         state_->callback = [s = state_]() {
             s->loop->unregister_fd(s->fd);
-            ssize_t n = ::recvfrom(s->fd, s->buf, s->len, 0,
+#ifdef _WIN32
+            int n = recvfrom(static_cast<SOCKET>(s->fd), static_cast<char*>(s->buf), static_cast<int>(s->len), 0,
+                            reinterpret_cast<sockaddr*>(&s->peer), &s->peer_len);
+            s->result.bytes = n;
+#else
+            ssize_t n = ::recvfrom(static_cast<int>(s->fd), s->buf, s->len, 0,
                                    reinterpret_cast<sockaddr*>(&s->peer), &s->peer_len);
             s->result.bytes = static_cast<std::ptrdiff_t>(n);
-            if (n >= 0) {
+#endif
+            if (s->result.bytes >= 0) {
                 s->result.peer_len = s->peer_len;
                 s->result.peer = s->peer;
             }
@@ -103,7 +114,7 @@ private:
     struct State {
         std::coroutine_handle<> handle;
         EventLoop* loop{nullptr};
-        int fd{-1};
+        poll_fd_t fd{static_cast<poll_fd_t>(-1)};
         void* buf{nullptr};
         std::size_t len{0};
         sockaddr_storage peer{};
@@ -144,9 +155,15 @@ public:
         state_->addrlen = addrlen_;
         state_->callback = [s = state_]() {
             s->loop->unregister_fd(s->fd);
-            ssize_t n = ::sendto(s->fd, s->buf, s->len, 0, s->addr, s->addrlen);
+#ifdef _WIN32
+            int n = sendto(static_cast<SOCKET>(s->fd), static_cast<const char*>(s->buf), static_cast<int>(s->len), 0, s->addr, s->addrlen);
+            s->result = n;
+            if (n < 0) s->ec = std::error_code(WSAGetLastError(), std::system_category());
+#else
+            ssize_t n = ::sendto(static_cast<int>(s->fd), s->buf, s->len, 0, s->addr, s->addrlen);
             s->result = static_cast<std::ptrdiff_t>(n);
             if (n < 0) s->ec = std::error_code(errno, std::system_category());
+#endif
             s->handle.resume();
         };
         loop_->register_fd(socket_->fd(), PollEvent::Write, &state_->callback);
@@ -159,7 +176,7 @@ private:
     struct State {
         std::coroutine_handle<> handle;
         EventLoop* loop{nullptr};
-        int fd{-1};
+        poll_fd_t fd{static_cast<poll_fd_t>(-1)};
         const void* buf{nullptr};
         std::size_t len{0};
         const sockaddr* addr{nullptr};

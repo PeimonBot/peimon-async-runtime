@@ -8,7 +8,7 @@
 namespace peimon {
 
 struct FdContext {
-    int fd;
+    poll_fd_t fd;
     void* user_data;
 };
 
@@ -25,7 +25,7 @@ public:
         if (epfd_ >= 0) close(epfd_);
     }
 
-    void add(int fd, PollEvent events, void* user_data) override {
+    void add(poll_fd_t fd, PollEvent events, void* user_data) override {
         auto* ctx = new FdContext{fd, user_data};
         fd_ctx_[fd] = ctx;
         epoll_event ev{};
@@ -38,7 +38,7 @@ public:
         }
     }
 
-    void modify(int fd, PollEvent events, void* user_data) override {
+    void modify(poll_fd_t fd, PollEvent events, void* user_data) override {
         auto it = fd_ctx_.find(fd);
         if (it == fd_ctx_.end()) return;
         it->second->user_data = user_data;
@@ -48,7 +48,7 @@ public:
         epoll_ctl(epfd_, EPOLL_CTL_MOD, fd, &ev);
     }
 
-    void remove(int fd) override {
+    void remove(poll_fd_t fd) override {
         auto it = fd_ctx_.find(fd);
         if (it != fd_ctx_.end()) {
             epoll_ctl(epfd_, EPOLL_CTL_DEL, fd, nullptr);
@@ -94,10 +94,10 @@ private:
     }
 
     int epfd_{-1};
-    std::unordered_map<int, FdContext*> fd_ctx_;
+    std::unordered_map<poll_fd_t, FdContext*> fd_ctx_;
 };
 
-std::unique_ptr<IPoller> make_poller() {
+std::unique_ptr<IPoller> make_poller(void* /*wakeup_user_data*/) {
     return std::make_unique<EpollPoller>();
 }
 

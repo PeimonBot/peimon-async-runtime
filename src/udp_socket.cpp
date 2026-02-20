@@ -1,66 +1,111 @@
 #include "peimon/udp_socket.hpp"
 #include <cerrno>
 #include <cstring>
-#include <fcntl.h>
 #include <stdexcept>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <fcntl.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#endif
 
 namespace peimon {
 
 namespace {
 
-int create_udp_socket() {
+poll_fd_t create_udp_socket() {
+#ifdef _WIN32
+    SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s == INVALID_SOCKET)
+        throw std::runtime_error("socket failed");
+    u_long nonblock = 1;
+    if (ioctlsocket(s, FIONBIO, &nonblock) != 0) {
+        closesocket(s);
+        throw std::runtime_error("ioctlsocket FIONBIO failed");
+    }
+    return static_cast<poll_fd_t>(s);
+#else
     int fd = ::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
     if (fd < 0)
         throw std::runtime_error(std::string("socket: ") + std::strerror(errno));
     int flags = ::fcntl(fd, F_GETFL, 0);
     if (flags >= 0) ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    return fd;
+    return static_cast<poll_fd_t>(fd);
+#endif
 }
 
 }  // namespace
 
 void UdpSocket::bind(const char* host, std::uint16_t port) {
-    if (fd_ >= 0) return;
+    if (fd_ != static_cast<poll_fd_t>(-1)) return;
     fd_ = create_udp_socket();
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
-    if (::inet_pton(AF_INET, host ? host : "0.0.0.0", &addr.sin_addr) <= 0) {
-        ::close(fd_);
-        fd_ = -1;
+    if (inet_pton(AF_INET, host ? host : "0.0.0.0", &addr.sin_addr) <= 0) {
+#ifdef _WIN32
+        closesocket(static_cast<SOCKET>(fd_));
+#else
+        ::close(static_cast<int>(fd_));
+#endif
+        fd_ = static_cast<poll_fd_t>(-1);
         throw std::runtime_error("inet_pton failed");
     }
     int one = 1;
-    ::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-    if (::bind(fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+#ifdef _WIN32
+    setsockopt(static_cast<SOCKET>(fd_), SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&one), sizeof(one));
+    if (::bind(static_cast<SOCKET>(fd_), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+        closesocket(static_cast<SOCKET>(fd_));
+        fd_ = static_cast<poll_fd_t>(-1);
+        throw std::runtime_error("bind failed");
+    }
+#else
+    ::setsockopt(static_cast<int>(fd_), SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    if (::bind(static_cast<int>(fd_), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
         int e = errno;
-        ::close(fd_);
-        fd_ = -1;
+        ::close(static_cast<int>(fd_));
+        fd_ = static_cast<poll_fd_t>(-1);
         throw std::runtime_error(std::string("bind: ") + std::strerror(e));
     }
+#endif
 }
 
 void UdpSocket::close() {
-    if (fd_ >= 0) {
+    if (fd_ != static_cast<poll_fd_t>(-1)) {
         if (loop_) loop_->unregister_fd(fd_);
-        ::close(fd_);
-        fd_ = -1;
+#ifdef _WIN32
+        closesocket(static_cast<SOCKET>(fd_));
+#else
+        ::close(static_cast<int>(fd_));
+#endif
+        fd_ = static_cast<poll_fd_t>(-1);
         loop_ = nullptr;
     }
 }
 
 std::ptrdiff_t UdpSocket::recv_from(void* buf, std::size_t len, sockaddr* addr, socklen_t* addrlen) {
-    if (fd_ < 0) return -1;
-    ssize_t n = ::recvfrom(fd_, buf, len, 0, addr, addrlen);
+    if (fd_ == static_cast<poll_fd_t>(-1)) return -1;
+#ifdef _WIN32
+    int n = recvfrom(static_cast<SOCKET>(fd_), static_cast<char*>(buf), static_cast<int>(len), 0, addr, addrlen);
     return static_cast<std::ptrdiff_t>(n);
+#else
+    ssize_t n = ::recvfrom(static_cast<int>(fd_), buf, len, 0, addr, addrlen);
+    return static_cast<std::ptrdiff_t>(n);
+#endif
 }
 
 std::ptrdiff_t UdpSocket::send_to(const void* buf, std::size_t len, const sockaddr* addr, socklen_t addrlen) {
-    if (fd_ < 0) return -1;
-    ssize_t n = ::sendto(fd_, buf, len, 0, addr, addrlen);
+    if (fd_ == static_cast<poll_fd_t>(-1)) return -1;
+#ifdef _WIN32
+    int n = sendto(static_cast<SOCKET>(fd_), static_cast<const char*>(buf), static_cast<int>(len), 0, addr, addrlen);
     return static_cast<std::ptrdiff_t>(n);
+#else
+    ssize_t n = ::sendto(static_cast<int>(fd_), buf, len, 0, addr, addrlen);
+    return static_cast<std::ptrdiff_t>(n);
+#endif
 }
 
 }  // namespace peimon
