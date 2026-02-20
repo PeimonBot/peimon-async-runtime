@@ -1,12 +1,19 @@
 cmake_minimum_required(VERSION 3.20)
-project(peimon-async-runtime VERSION 0.1.0 LANGUAGES CXX DESCRIPTION "Minimal epoll event loop and fixed thread pool for Linux")
+project(peimon-async-runtime VERSION 0.1.0 LANGUAGES CXX DESCRIPTION "Async event loop (epoll/kqueue) and thread pool for Linux and macOS")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    message(FATAL_ERROR "peimon-async-runtime is Linux-only (epoll). Got: ${CMAKE_SYSTEM_NAME}")
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    message(FATAL_ERROR "peimon-async-runtime supports Linux (epoll) and macOS (kqueue). Got: ${CMAKE_SYSTEM_NAME}")
+endif()
+
+# Poller: epoll on Linux, kqueue on macOS
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(PEIMON_POLLER_SOURCES src/epoll_poller.cpp)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(PEIMON_POLLER_SOURCES src/kqueue_poller.cpp)
 endif()
 
 # OpenSSL
@@ -15,23 +22,37 @@ find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(nghttp2 REQUIRED libnghttp2)
 
-# ngtcp2 and nghttp3 for QUIC/HTTP/3 (from third_party)
-list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
-find_package(ngtcp2 CONFIG REQUIRED)
-find_package(nghttp3 CONFIG REQUIRED)
+# ngtcp2 and nghttp3 for QUIC/HTTP/3 (from third_party) — Linux only; shared libs may be absent (gitignored)
+set(PEIMON_BUILD_HTTP3 OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(_tp "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+    if(EXISTS "${_tp}/lib/libngtcp2.so.16.7.3" AND EXISTS "${_tp}/lib/libngtcp2_crypto_ossl.so.0.1.1")
+        list(APPEND CMAKE_PREFIX_PATH "${_tp}")
+        find_package(ngtcp2 CONFIG QUIET)
+        find_package(nghttp3 CONFIG QUIET)
+        if(ngtcp2_FOUND AND nghttp3_FOUND)
+            set(PEIMON_BUILD_HTTP3 ON)
+        endif()
+    endif()
+    unset(_tp)
+endif()
 
-# Library
-add_library(peimon_async_runtime
+# Library sources (core + optional HTTP/3)
+set(PEIMON_LIB_SOURCES
     src/event_loop.cpp
-    src/epoll_poller.cpp
+    ${PEIMON_POLLER_SOURCES}
     src/thread_pool.cpp
     src/tcp_socket.cpp
     src/udp_socket.cpp
     src/tls_socket.cpp
     src/http_message.cpp
     src/http_server.cpp
-    src/http3_server.cpp
 )
+if(PEIMON_BUILD_HTTP3)
+    list(APPEND PEIMON_LIB_SOURCES src/http3_server.cpp)
+endif()
+
+add_library(peimon_async_runtime ${PEIMON_LIB_SOURCES})
 target_include_directories(peimon_async_runtime
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -39,7 +60,11 @@ target_include_directories(peimon_async_runtime
 )
 target_link_libraries(peimon_async_runtime PUBLIC
     OpenSSL::SSL OpenSSL::Crypto ${nghttp2_LIBRARIES}
-    ngtcp2::ngtcp2_crypto_ossl ngtcp2::ngtcp2 nghttp3::nghttp3)
+)
+if(PEIMON_BUILD_HTTP3)
+    target_link_libraries(peimon_async_runtime PUBLIC
+        ngtcp2::ngtcp2_crypto_ossl ngtcp2::ngtcp2 nghttp3::nghttp3)
+endif()
 target_include_directories(peimon_async_runtime PRIVATE ${nghttp2_INCLUDE_DIRS})
 
 # Self-signed cert for HTTPS demo (optional; run target generate_certs or create cert.pem/key.pem manually)
@@ -52,11 +77,13 @@ add_custom_target(generate_certs
     COMMENT "Generating self-signed TLS cert and key for HTTPS demo"
 )
 
-# Demo executable (HTTPS Hello World server on port 8443; cert.pem/key.pem in build dir)
-add_executable(peimon_demo examples/demo.cpp)
-target_link_libraries(peimon_demo PRIVATE peimon_async_runtime)
-add_dependencies(peimon_demo generate_certs)
+# Demo executable (HTTP/1.1, HTTP/2, HTTP/3; requires ngtcp2/nghttp3)
+if(PEIMON_BUILD_HTTP3)
+    add_executable(peimon_demo examples/demo.cpp)
+    target_link_libraries(peimon_demo PRIVATE peimon_async_runtime)
+    add_dependencies(peimon_demo generate_certs)
+endif()
 
-# Minimal loop test
+# Minimal loop test (event loop + poller only; always built)
 add_executable(test_loop_minimal examples/test_loop_minimal.cpp)
 target_link_libraries(test_loop_minimal PRIVATE peimon_async_runtime)

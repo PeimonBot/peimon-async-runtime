@@ -11,7 +11,20 @@ namespace peimon {
 namespace {
 
 int create_wakeup_pair(int fds[2]) {
+#if defined(__linux__)
     return pipe2(fds, O_CLOEXEC);
+#else
+    if (pipe(fds) != 0) return -1;
+    for (int i = 0; i < 2; ++i) {
+        int flags = fcntl(fds[i], F_GETFD);
+        if (flags < 0 || fcntl(fds[i], F_SETFD, flags | FD_CLOEXEC) != 0) {
+            close(fds[0]);
+            close(fds[1]);
+            return -1;
+        }
+    }
+    return 0;
+#endif
 }
 
 }  // namespace

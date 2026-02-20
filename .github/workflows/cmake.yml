@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  build-linux:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -25,3 +25,28 @@ jobs:
       - name: Build
         run: |
           cmake --build build
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew update
+          brew install cmake openssl@3 libnghttp2
+
+      - name: Configure
+        run: |
+          export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix libnghttp2)/lib/pkgconfig"
+          cmake -B build -S . \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix openssl@3);$(brew --prefix libnghttp2)"
+
+      - name: Build
+        run: |
+          cmake --build build
+
+      - name: Run minimal test
+        run: |
+          ./build/test_loop_minimal
