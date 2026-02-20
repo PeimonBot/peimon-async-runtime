@@ -98,22 +98,22 @@ struct HandshakeState {
 };
 
 void TlsSocket::AsyncHandshakeAwaitable::try_accept() {
-    int ret = SSL_accept(socket_->ssl_);
-    if (ret == 1) {
+    int const ssl_accept_result = SSL_accept(socket_->ssl_);
+    if (ssl_accept_result == 1) {
         if (state_->registered && state_->loop) state_->loop->unregister_fd(socket_->fd());
         state_->registered = false;
         state_->handle.resume();
         return;
     }
-    int err = SSL_get_error(socket_->ssl_, ret);
-    if (err != SSL_ERROR_WANT_READ && err != SSL_ERROR_WANT_WRITE) {
+    int const ssl_error = SSL_get_error(socket_->ssl_, ssl_accept_result);
+    if (ssl_error != SSL_ERROR_WANT_READ && ssl_error != SSL_ERROR_WANT_WRITE) {
         state_->ec = std::error_code(static_cast<int>(ERR_get_error()), std::system_category());
         if (state_->registered && state_->loop) state_->loop->unregister_fd(socket_->fd());
         state_->registered = false;
         state_->handle.resume();
         return;
     }
-    PollEvent ev = (err == SSL_ERROR_WANT_READ) ? PollEvent::Read : PollEvent::Write;
+    PollEvent ev = (ssl_error == SSL_ERROR_WANT_READ) ? PollEvent::Read : PollEvent::Write;
     state_->callback = [this]() { try_accept(); };
     if (state_->registered)
         state_->loop->modify_fd(socket_->fd(), ev, &state_->callback);
@@ -143,23 +143,23 @@ struct TlsReadState {
     EventLoop* loop{nullptr};
     int fd{-1};
     bool registered{false};
-    ssize_t op_result{0};
+    std::ptrdiff_t op_result{0};
     std::error_code ec;
     EventLoop::Callback callback;
 };
 
 void TlsSocket::AsyncReadAwaitable::try_read() {
-    int n = SSL_read(socket_->ssl_, buf_, static_cast<int>(len_));
-    if (n > 0) {
+    int const bytes_read = SSL_read(socket_->ssl_, buf_, static_cast<int>(len_));
+    if (bytes_read > 0) {
         if (state_->registered && state_->loop) state_->loop->unregister_fd(socket_->fd());
         state_->registered = false;
-        state_->op_result = n;
+        state_->op_result = static_cast<std::ptrdiff_t>(bytes_read);
         state_->handle.resume();
         return;
     }
-    int err = SSL_get_error(socket_->ssl_, n);
-    if (err != SSL_ERROR_WANT_READ && err != SSL_ERROR_WANT_WRITE) {
-        state_->ec = (err == SSL_ERROR_ZERO_RETURN)
+    int const ssl_error = SSL_get_error(socket_->ssl_, bytes_read);
+    if (ssl_error != SSL_ERROR_WANT_READ && ssl_error != SSL_ERROR_WANT_WRITE) {
+        state_->ec = (ssl_error == SSL_ERROR_ZERO_RETURN)
                          ? std::error_code{}
                          : std::error_code(static_cast<int>(ERR_get_error()), std::system_category());
         if (state_->registered && state_->loop) state_->loop->unregister_fd(socket_->fd());
@@ -167,7 +167,7 @@ void TlsSocket::AsyncReadAwaitable::try_read() {
         state_->handle.resume();
         return;
     }
-    PollEvent ev = (err == SSL_ERROR_WANT_READ) ? PollEvent::Read : PollEvent::Write;
+    PollEvent ev = (ssl_error == SSL_ERROR_WANT_READ) ? PollEvent::Read : PollEvent::Write;
     state_->callback = [this]() { try_read(); };
     if (state_->registered)
         state_->loop->modify_fd(socket_->fd(), ev, &state_->callback);
@@ -201,29 +201,29 @@ struct TlsWriteState {
     EventLoop* loop{nullptr};
     int fd{-1};
     bool registered{false};
-    ssize_t op_result{0};
+    std::ptrdiff_t op_result{0};
     std::error_code ec;
     EventLoop::Callback callback;
 };
 
 void TlsSocket::AsyncWriteAwaitable::try_write() {
-    int n = SSL_write(socket_->ssl_, buf_, static_cast<int>(len_));
-    if (n > 0) {
+    int const bytes_written = SSL_write(socket_->ssl_, buf_, static_cast<int>(len_));
+    if (bytes_written > 0) {
         if (state_->registered && state_->loop) state_->loop->unregister_fd(socket_->fd());
         state_->registered = false;
-        state_->op_result = n;
+        state_->op_result = static_cast<std::ptrdiff_t>(bytes_written);
         state_->handle.resume();
         return;
     }
-    int err = SSL_get_error(socket_->ssl_, n);
-    if (err != SSL_ERROR_WANT_READ && err != SSL_ERROR_WANT_WRITE) {
+    int const ssl_error = SSL_get_error(socket_->ssl_, bytes_written);
+    if (ssl_error != SSL_ERROR_WANT_READ && ssl_error != SSL_ERROR_WANT_WRITE) {
         state_->ec = std::error_code(static_cast<int>(ERR_get_error()), std::system_category());
         if (state_->registered && state_->loop) state_->loop->unregister_fd(socket_->fd());
         state_->registered = false;
         state_->handle.resume();
         return;
     }
-    PollEvent ev = (err == SSL_ERROR_WANT_READ) ? PollEvent::Read : PollEvent::Write;
+    PollEvent ev = (ssl_error == SSL_ERROR_WANT_READ) ? PollEvent::Read : PollEvent::Write;
     state_->callback = [this]() { try_write(); };
     if (state_->registered)
         state_->loop->modify_fd(socket_->fd(), ev, &state_->callback);
