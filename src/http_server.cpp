@@ -7,7 +7,9 @@
 #include <cstdint>
 #ifdef _WIN32
 #define NGHTTP2_NO_SSIZE_T
+#ifndef NGHTTP2_STATICLIB
 #define NGHTTP2_STATICLIB
+#endif
 #endif
 #include <nghttp2/nghttp2.h>
 #if defined(__linux__)

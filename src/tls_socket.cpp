@@ -5,7 +5,9 @@
 #include <cstdint>
 #ifdef _WIN32
 #define NGHTTP2_NO_SSIZE_T
+#ifndef NGHTTP2_STATICLIB
 #define NGHTTP2_STATICLIB
+#endif
 #endif
 #include <nghttp2/nghttp2.h>
 #include <cerrno>
@@ -141,7 +143,7 @@ struct TlsReadState {
     EventLoop* loop{nullptr};
     int fd{-1};
     bool registered{false};
-    ssize_t result{0};
+    ssize_t op_result{0};
     std::error_code ec;
     EventLoop::Callback callback;
 };
@@ -151,7 +153,7 @@ void TlsSocket::AsyncReadAwaitable::try_read() {
     if (n > 0) {
         if (state_->registered && state_->loop) state_->loop->unregister_fd(socket_->fd());
         state_->registered = false;
-        state_->result = n;
+        state_->op_result = n;
         state_->handle.resume();
         return;
     }
@@ -184,7 +186,7 @@ void TlsSocket::AsyncReadAwaitable::await_suspend(std::coroutine_handle<> h) {
 }
 
 std::ptrdiff_t TlsSocket::AsyncReadAwaitable::await_resume() {
-    return state_ ? state_->result : 0;
+    return state_ ? state_->op_result : 0;
 }
 
 std::error_code TlsSocket::AsyncReadAwaitable::error() const {
@@ -199,7 +201,7 @@ struct TlsWriteState {
     EventLoop* loop{nullptr};
     int fd{-1};
     bool registered{false};
-    ssize_t result{0};
+    ssize_t op_result{0};
     std::error_code ec;
     EventLoop::Callback callback;
 };
@@ -209,7 +211,7 @@ void TlsSocket::AsyncWriteAwaitable::try_write() {
     if (n > 0) {
         if (state_->registered && state_->loop) state_->loop->unregister_fd(socket_->fd());
         state_->registered = false;
-        state_->result = n;
+        state_->op_result = n;
         state_->handle.resume();
         return;
     }
@@ -240,7 +242,7 @@ void TlsSocket::AsyncWriteAwaitable::await_suspend(std::coroutine_handle<> h) {
 }
 
 std::ptrdiff_t TlsSocket::AsyncWriteAwaitable::await_resume() {
-    return state_ ? state_->result : 0;
+    return state_ ? state_->op_result : 0;
 }
 
 std::error_code TlsSocket::AsyncWriteAwaitable::error() const {
