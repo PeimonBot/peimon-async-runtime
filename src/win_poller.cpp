@@ -52,12 +52,14 @@ PollEvent from_network_events(const WSANETWORKEVENTS& ne) {
     if ((ne.lNetworkEvents & (FD_WRITE | FD_CONNECT)) != 0) {
         events = events | PollEvent::Write;
     }
-    for (int i = 0; i < FD_MAX_EVENTS; ++i) {
-        if (ne.iErrorCode[i] != 0) {
-            events = events | PollEvent::Error;
-            break;
-        }
-    }
+    // Only check error codes for events that actually occurred (MSDN: other elements not modified).
+    const long occurred = ne.lNetworkEvents;
+    if ((occurred & FD_READ) && ne.iErrorCode[FD_READ_BIT] != 0) events = events | PollEvent::Error;
+    if ((occurred & FD_WRITE) && ne.iErrorCode[FD_WRITE_BIT] != 0) events = events | PollEvent::Error;
+    if ((occurred & FD_OOB) && ne.iErrorCode[FD_OOB_BIT] != 0) events = events | PollEvent::Error;
+    if ((occurred & FD_ACCEPT) && ne.iErrorCode[FD_ACCEPT_BIT] != 0) events = events | PollEvent::Error;
+    if ((occurred & FD_CONNECT) && ne.iErrorCode[FD_CONNECT_BIT] != 0) events = events | PollEvent::Error;
+    if ((occurred & FD_CLOSE) && ne.iErrorCode[FD_CLOSE_BIT] != 0) events = events | PollEvent::Error;
     return events;
 }
 
