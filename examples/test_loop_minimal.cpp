@@ -1,14 +1,18 @@
 #include "peimon/event_loop.hpp"
+#include <cstdlib>
 #include <iostream>
 
 int main() {
     peimon::EventLoop loop;
-    loop.run_in_loop([&loop]() {
-        std::cout << "callback ran\n";
+    bool callback_ran = false;
+    loop.run_in_loop([&]() {
+        callback_ran = true;
         loop.stop();
     });
-    std::cout << "calling run()\n";
     loop.run();
-    std::cout << "run() returned\n";
+    if (!callback_ran) {
+        std::cerr << "FAIL: run_in_loop callback did not run\n";
+        return 1;
+    }
     return 0;
 }

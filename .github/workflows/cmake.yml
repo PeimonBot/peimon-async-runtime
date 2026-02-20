@@ -26,6 +26,11 @@ jobs:
         run: |
           cmake --build build
 
+      - name: Run tests
+        run: |
+          ./build/test_loop_minimal
+          ./build/functional_tests
+
   build-macos:
     runs-on: macos-latest
     steps:
@@ -47,9 +52,10 @@ jobs:
         run: |
           cmake --build build
 
-      - name: Run minimal test
+      - name: Run tests
         run: |
           ./build/test_loop_minimal
+          ./build/functional_tests
 
   build-windows:
     runs-on: windows-latest
@@ -93,7 +99,9 @@ jobs:
         shell: pwsh
         working-directory: ${{ github.workspace }}
 
-      - name: Run minimal test
-        run: .\build\Release\test_loop_minimal.exe
+      - name: Run tests
+        run: |
+          .\build\Release\test_loop_minimal.exe
+          .\build\Release\functional_tests.exe
         shell: pwsh
         working-directory: ${{ github.workspace }}
