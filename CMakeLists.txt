@@ -99,6 +99,7 @@ if(PEIMON_BUILD_HTTP3)
 endif()
 if(NOT WIN32)
     target_include_directories(peimon_async_runtime PRIVATE ${nghttp2_INCLUDE_DIRS})
+    target_link_directories(peimon_async_runtime PRIVATE ${nghttp2_LIBRARY_DIRS})
 endif()
 
 # Self-signed cert for HTTPS demo (optional; run target generate_certs or create cert.pem/key.pem manually)
