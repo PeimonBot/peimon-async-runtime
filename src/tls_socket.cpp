@@ -1,5 +1,6 @@
 #include "peimon/tls_socket.hpp"
 #include "peimon/event_loop.hpp"
+#include <cstdint>
 #include <nghttp2/nghttp2.h>
 #include <cerrno>
 #include <cstring>

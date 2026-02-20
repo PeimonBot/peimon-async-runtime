@@ -172,7 +172,7 @@ int EventLoop::next_timer_timeout_ms() const {
     auto next = timer_queue_.top().when;
     if (next <= now) return 0;
     auto d = std::chrono::duration_cast<std::chrono::milliseconds>(next - now);
-    return static_cast<int>(std::min(d.count(), std::int64_t(1000)));
+    return static_cast<int>((std::min)(d.count(), std::int64_t(1000)));
 }
 
 }  // namespace peimon
