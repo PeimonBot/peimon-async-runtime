@@ -3,7 +3,15 @@ build/
 *.o
 *.a
 *.so
+*.so.*
 *.d
+*.dylib
+
+# Third-party vendored binaries (use system libs or build from source)
+third_party/lib/*.so
+third_party/lib/*.so.*
+third_party/lib/*.a
+third_party/lib/*.dylib
 
 # Certs / keys (generated)
 *.pem
