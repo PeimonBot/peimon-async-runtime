@@ -256,7 +256,11 @@ Task<void> handle_h2_connection(EventLoop& loop, TlsSocket socket, const HttpHan
 
     nghttp2_session_callbacks* cbs = nullptr;
     if (nghttp2_session_callbacks_new(&cbs) != 0) { socket.close(); co_return; }
+#ifdef NGHTTP2_NO_SSIZE_T
+    nghttp2_session_callbacks_set_send_callback2(cbs, h2_send_cb);
+#else
     nghttp2_session_callbacks_set_send_callback(cbs, h2_send_cb);
+#endif
     nghttp2_session_callbacks_set_on_header_callback(cbs, h2_on_header);
     nghttp2_session_callbacks_set_on_frame_recv_callback(cbs, h2_on_frame_recv);
 
@@ -277,8 +281,13 @@ Task<void> handle_h2_connection(EventLoop& loop, TlsSocket socket, const HttpHan
         std::ptrdiff_t n = co_await socket.async_read(loop, tmp, chunk);
         if (n <= 0) break;
         read_buf.append(tmp, static_cast<std::size_t>(n));
+#ifdef NGHTTP2_NO_SSIZE_T
+        nghttp2_ssize consumed = nghttp2_session_mem_recv2(session,
+            reinterpret_cast<const uint8_t*>(read_buf.data()), read_buf.size());
+#else
         nghttp2_ssize consumed = nghttp2_session_mem_recv(session,
             reinterpret_cast<const uint8_t*>(read_buf.data()), read_buf.size());
+#endif
         if (consumed < 0) break;
         if (consumed > 0) {
             read_buf.erase(0, static_cast<std::size_t>(consumed));
