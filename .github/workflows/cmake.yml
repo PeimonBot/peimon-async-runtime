@@ -35,13 +35,13 @@ jobs:
       - name: Install dependencies
         run: |
           brew update
-          brew install cmake openssl@3 libnghttp2
+          brew install cmake openssl@3 nghttp2
 
       - name: Configure
         run: |
-          export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix libnghttp2)/lib/pkgconfig"
+          export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix nghttp2)/lib/pkgconfig"
           cmake -B build -S . \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix openssl@3);$(brew --prefix libnghttp2)"
+            -DCMAKE_PREFIX_PATH="$(brew --prefix openssl@3);$(brew --prefix nghttp2)"
 
       - name: Build
         run: |

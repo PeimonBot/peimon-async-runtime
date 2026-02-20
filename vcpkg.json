@@ -1,0 +1,9 @@
+{
+  "name": "peimon-async-runtime",
+  "version": "0.1.0",
+  "description": "Async event loop and thread pool for Linux, macOS, and Windows",
+  "dependencies": [
+    "openssl",
+    "nghttp2"
+  ]
+}

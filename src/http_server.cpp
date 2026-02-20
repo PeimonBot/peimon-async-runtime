@@ -254,7 +254,7 @@ Task<void> handle_h2_connection(EventLoop& loop, TlsSocket socket, const HttpHan
         std::ptrdiff_t n = co_await socket.async_read(loop, tmp, chunk);
         if (n <= 0) break;
         read_buf.append(tmp, static_cast<std::size_t>(n));
-        ssize_t consumed = nghttp2_session_mem_recv(session,
+        nghttp2_ssize consumed = nghttp2_session_mem_recv(session,
             reinterpret_cast<const uint8_t*>(read_buf.data()), read_buf.size());
         if (consumed < 0) break;
         if (consumed > 0) {
