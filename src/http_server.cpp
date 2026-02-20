@@ -2,7 +2,12 @@
 #include "peimon/http_message.hpp"
 #include "peimon/tcp_socket.hpp"
 #include "peimon/tls_socket.hpp"
+// Include before nghttp2 for MSVC (nghttp2.h uses uint8_t, size_t; avoid ssize_t)
+#include <cstddef>
 #include <cstdint>
+#ifdef _WIN32
+#define NGHTTP2_NO_SSIZE_T
+#endif
 #include <nghttp2/nghttp2.h>
 #if defined(__linux__)
 // Some Linux distros' libnghttp2 headers do not expose nghttp2_ssize

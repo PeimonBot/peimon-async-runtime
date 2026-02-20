@@ -1,6 +1,11 @@
 #include "peimon/tls_socket.hpp"
 #include "peimon/event_loop.hpp"
+// Include before nghttp2 for MSVC (nghttp2.h uses uint8_t, size_t; avoid ssize_t)
+#include <cstddef>
 #include <cstdint>
+#ifdef _WIN32
+#define NGHTTP2_NO_SSIZE_T
+#endif
 #include <nghttp2/nghttp2.h>
 #include <cerrno>
 #include <cstring>
