@@ -39,11 +39,25 @@ poll_fd_t create_udp_socket() {
     }
     return static_cast<poll_fd_t>(s);
 #else
-    int fd = ::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    int fd = ::socket(AF_INET,
+#if defined(SOCK_CLOEXEC)
+                      SOCK_DGRAM | SOCK_CLOEXEC,
+#else
+                      SOCK_DGRAM,
+#endif
+                      0);
     if (fd < 0)
         throw std::runtime_error(std::string("socket: ") + std::strerror(errno));
-    int flags = ::fcntl(fd, F_GETFL, 0);
-    if (flags >= 0) ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+#if !defined(SOCK_CLOEXEC)
+    {
+        int flags = ::fcntl(fd, F_GETFD, 0);
+        if (flags >= 0) ::fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+    }
+#endif
+    {
+        int flags = ::fcntl(fd, F_GETFL, 0);
+        if (flags >= 0) ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    }
     return static_cast<poll_fd_t>(fd);
 #endif
 }
