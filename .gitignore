@@ -1,0 +1,23 @@
+# Build
+build/
+*.o
+*.a
+*.so
+*.d
+
+# Certs / keys (generated)
+*.pem
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
