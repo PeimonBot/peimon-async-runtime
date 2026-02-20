@@ -1,0 +1,27 @@
+name: CMake
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev libnghttp2-dev cmake build-essential
+
+      - name: Configure
+        run: |
+          cmake -B build -S .
+
+      - name: Build
+        run: |
+          cmake --build build
