@@ -30,6 +30,7 @@ jobs:
         run: |
           ./build/test_loop_minimal
           ./build/functional_tests
+        timeout-minutes: 2
 
   build-macos:
     runs-on: macos-latest
@@ -56,6 +57,7 @@ jobs:
         run: |
           ./build/test_loop_minimal
           ./build/functional_tests
+        timeout-minutes: 2
 
   build-windows:
     runs-on: windows-latest
@@ -105,3 +107,4 @@ jobs:
           .\build\Release\functional_tests.exe
         shell: pwsh
         working-directory: ${{ github.workspace }}
+        timeout-minutes: 2
