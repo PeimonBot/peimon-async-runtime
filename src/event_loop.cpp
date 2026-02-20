@@ -110,15 +110,15 @@ void EventLoop::queue_in_loop(Callback cb) {
     run_in_loop(std::move(cb));
 }
 
-void EventLoop::register_fd(int fd, PollEvent events, void* user_data) {
+void EventLoop::register_fd(poll_fd_t fd, PollEvent events, void* user_data) {
     poller_->add(fd, events, user_data);
 }
 
-void EventLoop::unregister_fd(int fd) {
+void EventLoop::unregister_fd(poll_fd_t fd) {
     poller_->remove(fd);
 }
 
-void EventLoop::modify_fd(int fd, PollEvent events, void* user_data) {
+void EventLoop::modify_fd(poll_fd_t fd, PollEvent events, void* user_data) {
     poller_->modify(fd, events, user_data);
 }
 

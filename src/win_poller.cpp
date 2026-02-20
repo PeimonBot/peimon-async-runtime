@@ -1,60 +1,68 @@
 #include "peimon/event_loop.hpp"
+#include <atomic>
+#include <memory>
+#include <mutex>
+#include <stdexcept>
+#include <thread>
+#include <unordered_map>
+#include <vector>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
-#include <stdexcept>
-#include <unordered_map>
-#include <vector>
-
-#pragma comment(lib, "ws2_32.lib")
 
 namespace peimon {
 
 namespace {
-struct WinsockInit {
-    WinsockInit() {
+
+void ensure_winsock() {
+    static const bool ok = []() {
         WSADATA d{};
-        if (WSAStartup(MAKEWORD(2, 2), &d) != 0) std::terminate();
-    }
-    ~WinsockInit() { WSACleanup(); }
-} g_winsock_init;
-}  // namespace
+        return WSAStartup(MAKEWORD(2, 2), &d) == 0;
+    }();
+    if (!ok) throw std::runtime_error("WSAStartup failed");
+}
 
-namespace {
-
-struct IocpSocketContext {
+struct SocketContext {
     poll_fd_t fd{static_cast<poll_fd_t>(-1)};
     void* user_data{nullptr};
     PollEvent events{PollEvent::None};
-    OVERLAPPED read_ov{};
-    OVERLAPPED write_ov{};
-    std::vector<char> read_buf;
-    bool read_pending{false};
-    bool write_pending{false};
+    WSAEVENT event{WSA_INVALID_EVENT};
 };
 
-static char s_wakeup_sentinel;
-
-static void start_read(IocpSocketContext* ctx, SOCKET s) {
-    if (ctx->read_pending || (ctx->events & PollEvent::Read) == PollEvent::None) return;
-    if (ctx->read_buf.empty()) ctx->read_buf.resize(256);
-    WSABUF wbuf{static_cast<ULONG>(ctx->read_buf.size()), ctx->read_buf.data()};
-    DWORD flags = 0;
-    ctx->read_ov = OVERLAPPED{};
-    if (WSARecv(s, &wbuf, 1, nullptr, &flags, &ctx->read_ov, nullptr) == 0 ||
-        WSAGetLastError() == WSA_IO_PENDING) {
-        ctx->read_pending = true;
-    }
+constexpr DWORD to_completion_bits(PollEvent events) {
+    return static_cast<DWORD>(static_cast<std::uint32_t>(events));
 }
 
-static void start_write(IocpSocketContext* ctx, SOCKET s) {
-    if (ctx->write_pending || (ctx->events & PollEvent::Write) == PollEvent::None) return;
-    ctx->write_ov = OVERLAPPED{};
-    if (WSASend(s, nullptr, 0, nullptr, 0, &ctx->write_ov, nullptr) == 0 ||
-        WSAGetLastError() == WSA_IO_PENDING) {
-        ctx->write_pending = true;
-    }
+PollEvent from_completion_bits(DWORD bits) {
+    return static_cast<PollEvent>(static_cast<std::uint32_t>(bits));
 }
+
+long to_network_event_mask(PollEvent events) {
+    long mask = FD_CLOSE;
+    if ((events & PollEvent::Read) != PollEvent::None) mask |= FD_READ | FD_ACCEPT;
+    if ((events & PollEvent::Write) != PollEvent::None) mask |= FD_WRITE | FD_CONNECT;
+    return mask;
+}
+
+PollEvent from_network_events(const WSANETWORKEVENTS& ne) {
+    PollEvent events = PollEvent::None;
+    if ((ne.lNetworkEvents & (FD_READ | FD_ACCEPT | FD_CLOSE)) != 0) {
+        events = events | PollEvent::Read;
+    }
+    if ((ne.lNetworkEvents & (FD_WRITE | FD_CONNECT)) != 0) {
+        events = events | PollEvent::Write;
+    }
+    for (int i = 0; i < FD_MAX_EVENTS; ++i) {
+        if (ne.iErrorCode[i] != 0) {
+            events = events | PollEvent::Error;
+            break;
+        }
+    }
+    return events;
+}
+
+char s_wakeup_key;
+char s_stop_key;
 
 }  // namespace
 
@@ -62,125 +70,181 @@ class IocpPoller : public IPoller {
 public:
     explicit IocpPoller(void* wakeup_user_data)
         : wakeup_user_data_(wakeup_user_data),
-          iocp_(CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 0)) {
-        if (!iocp_) {
-            throw std::runtime_error("CreateIoCompletionPort failed");
-        }
+          iocp_(CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 0)),
+          update_event_(WSACreateEvent()) {
+        ensure_winsock();
+        if (!iocp_) throw std::runtime_error("CreateIoCompletionPort failed");
+        if (update_event_ == WSA_INVALID_EVENT) throw std::runtime_error("WSACreateEvent failed");
+        bridge_thread_ = std::thread([this]() { bridge_events_to_iocp(); });
     }
 
     ~IocpPoller() override {
+        stopping_.store(true, std::memory_order_release);
+        WSASetEvent(update_event_);
+        PostQueuedCompletionStatus(iocp_, 0, reinterpret_cast<ULONG_PTR>(&s_stop_key), nullptr);
+        if (bridge_thread_.joinable()) bridge_thread_.join();
+
+        std::lock_guard lock(ctx_mutex_);
         for (auto& [fd, ctx] : ctx_map_) {
-            delete ctx;
+            WSAEventSelect(static_cast<SOCKET>(fd), nullptr, 0);
+            if (ctx->event != WSA_INVALID_EVENT) WSACloseEvent(ctx->event);
         }
+        ctx_map_.clear();
+
+        if (update_event_ != WSA_INVALID_EVENT) WSACloseEvent(update_event_);
         if (iocp_) CloseHandle(iocp_);
     }
 
     void add(poll_fd_t fd, PollEvent events, void* user_data) override {
-        auto* ctx = new IocpSocketContext{};
+        auto ctx = std::make_shared<SocketContext>();
         ctx->fd = fd;
         ctx->user_data = user_data;
         ctx->events = events;
-        ctx_map_[fd] = ctx;
+        ctx->event = WSACreateEvent();
+        if (ctx->event == WSA_INVALID_EVENT) throw std::runtime_error("WSACreateEvent failed");
 
-        SOCKET s = static_cast<SOCKET>(fd);
-        if (CreateIoCompletionPort(reinterpret_cast<HANDLE>(s), iocp_,
-                                   reinterpret_cast<ULONG_PTR>(ctx), 0) == nullptr) {
-            delete ctx;
-            ctx_map_.erase(fd);
-            throw std::runtime_error("CreateIoCompletionPort (associate socket) failed");
+        const SOCKET s = static_cast<SOCKET>(fd);
+        if (WSAEventSelect(s, ctx->event, to_network_event_mask(events)) == SOCKET_ERROR) {
+            WSACloseEvent(ctx->event);
+            throw std::runtime_error("WSAEventSelect failed");
         }
 
-        start_read(ctx, s);
-        start_write(ctx, s);
+        std::lock_guard lock(ctx_mutex_);
+        if (ctx_map_.size() >= 63) {
+            WSAEventSelect(s, nullptr, 0);
+            WSACloseEvent(ctx->event);
+            throw std::runtime_error("Windows poller currently supports up to 63 sockets");
+        }
+        ctx_map_[fd] = std::move(ctx);
+        WSASetEvent(update_event_);
     }
 
     void modify(poll_fd_t fd, PollEvent events, void* user_data) override {
+        std::lock_guard lock(ctx_mutex_);
         auto it = ctx_map_.find(fd);
         if (it == ctx_map_.end()) return;
         it->second->user_data = user_data;
         it->second->events = events;
-        SOCKET s = static_cast<SOCKET>(fd);
-        if (!it->second->read_pending) start_read(it->second, s);
-        if (!it->second->write_pending) start_write(it->second, s);
+        if (WSAEventSelect(static_cast<SOCKET>(fd), it->second->event, to_network_event_mask(events))
+            == SOCKET_ERROR) {
+            throw std::runtime_error("WSAEventSelect modify failed");
+        }
+        WSASetEvent(update_event_);
     }
 
     void remove(poll_fd_t fd) override {
-        auto it = ctx_map_.find(fd);
-        if (it != ctx_map_.end()) {
-            delete it->second;
+        std::shared_ptr<SocketContext> removed;
+        {
+            std::lock_guard lock(ctx_mutex_);
+            auto it = ctx_map_.find(fd);
+            if (it == ctx_map_.end()) return;
+            removed = it->second;
             ctx_map_.erase(it);
+            WSASetEvent(update_event_);
         }
+        WSAEventSelect(static_cast<SOCKET>(fd), nullptr, 0);
+        if (removed->event != WSA_INVALID_EVENT) WSACloseEvent(removed->event);
     }
 
     int wait(std::vector<FdEvent>& out_events, int timeout_ms) override {
         out_events.clear();
-        DWORD t = (timeout_ms < 0) ? INFINITE : static_cast<DWORD>(timeout_ms);
-        bool first = true;
-        static constexpr std::size_t max_events = 64;
+        constexpr std::size_t max_events = 64;
+        const DWORD timeout = timeout_ms < 0 ? INFINITE : static_cast<DWORD>(timeout_ms);
+        bool first_wait = true;
 
         while (out_events.size() < max_events) {
             DWORD bytes = 0;
             ULONG_PTR key = 0;
             LPOVERLAPPED ov = nullptr;
-            DWORD wait_ms = first ? t : 0;
-            first = false;
+            const DWORD wait_ms = first_wait ? timeout : 0;
+            first_wait = false;
 
-            if (!GetQueuedCompletionStatus(iocp_, &bytes, &key, &ov, wait_ms)) {
-                if (ov == nullptr) {
-                    DWORD err = GetLastError();
-                    if (err == WAIT_TIMEOUT) return static_cast<int>(out_events.size());
-                    if (err == ERROR_ABANDONED_WAIT_0) return -1;
-                }
-                break;
+            const BOOL ok = GetQueuedCompletionStatus(iocp_, &bytes, &key, &ov, wait_ms);
+            if (!ok && ov == nullptr) {
+                const DWORD err = GetLastError();
+                if (err == WAIT_TIMEOUT) break;
+                if (err == ERROR_ABANDONED_WAIT_0) return -1;
+                continue;
             }
 
-            if (key == reinterpret_cast<ULONG_PTR>(&s_wakeup_sentinel)) {
+            if (key == reinterpret_cast<ULONG_PTR>(&s_wakeup_key)) {
                 if (wakeup_user_data_) {
-                    FdEvent e;
-                    e.fd = static_cast<poll_fd_t>(-1);
-                    e.events = PollEvent::Read;
-                    e.user_data = wakeup_user_data_;
-                    out_events.push_back(e);
+                    out_events.push_back(
+                        FdEvent{static_cast<poll_fd_t>(-1), PollEvent::Read, wakeup_user_data_});
                 }
-                return static_cast<int>(out_events.size());
+                continue;
             }
+            if (key == reinterpret_cast<ULONG_PTR>(&s_stop_key)) return -1;
 
-            auto* ctx = reinterpret_cast<IocpSocketContext*>(key);
-            if (!ctx || ctx_map_.find(ctx->fd) == ctx_map_.end()) continue;
-
-            SOCKET s = static_cast<SOCKET>(ctx->fd);
-            if (ov == &ctx->read_ov) {
-                ctx->read_pending = false;
-                FdEvent e;
-                e.fd = ctx->fd;
-                e.events = PollEvent::Read;
-                e.user_data = ctx->user_data;
-                out_events.push_back(e);
-                if ((ctx->events & PollEvent::Read) != PollEvent::None) start_read(ctx, s);
-            } else if (ov == &ctx->write_ov) {
-                ctx->write_pending = false;
-                FdEvent e;
-                e.fd = ctx->fd;
-                e.events = PollEvent::Write;
-                e.user_data = ctx->user_data;
-                out_events.push_back(e);
-                if ((ctx->events & PollEvent::Write) != PollEvent::None) start_write(ctx, s);
+            const poll_fd_t fd = static_cast<poll_fd_t>(key);
+            void* user_data = nullptr;
+            {
+                std::lock_guard lock(ctx_mutex_);
+                auto it = ctx_map_.find(fd);
+                if (it == ctx_map_.end()) continue;
+                user_data = it->second->user_data;
             }
+            out_events.push_back(FdEvent{fd, from_completion_bits(bytes), user_data});
         }
+
         return static_cast<int>(out_events.size());
     }
 
     void wakeup() override {
-        if (iocp_) {
-            PostQueuedCompletionStatus(iocp_, 0,
-                                       reinterpret_cast<ULONG_PTR>(&s_wakeup_sentinel), nullptr);
-        }
+        PostQueuedCompletionStatus(iocp_, 0, reinterpret_cast<ULONG_PTR>(&s_wakeup_key), nullptr);
     }
 
 private:
+    void bridge_events_to_iocp() {
+        while (!stopping_.load(std::memory_order_acquire)) {
+            std::vector<std::shared_ptr<SocketContext>> contexts;
+            contexts.reserve(63);
+            {
+                std::lock_guard lock(ctx_mutex_);
+                for (auto& [fd, ctx] : ctx_map_) {
+                    contexts.push_back(ctx);
+                    if (contexts.size() == 63) break;
+                }
+            }
+
+            std::vector<WSAEVENT> events;
+            events.reserve(contexts.size() + 1);
+            events.push_back(update_event_);
+            for (const auto& ctx : contexts) events.push_back(ctx->event);
+
+            const DWORD timeout_ms = contexts.empty() ? 200 : 1000;
+            const DWORD rv = WSAWaitForMultipleEvents(
+                static_cast<DWORD>(events.size()), events.data(), FALSE, timeout_ms, FALSE);
+
+            if (rv == WSA_WAIT_TIMEOUT || rv == WSA_WAIT_FAILED) continue;
+
+            const DWORD idx = rv - WSA_WAIT_EVENT_0;
+            if (idx == 0) {
+                WSAResetEvent(update_event_);
+                continue;
+            }
+            if (idx >= events.size()) continue;
+
+            const auto& ctx = contexts[idx - 1];
+            WSANETWORKEVENTS ne{};
+            if (WSAEnumNetworkEvents(static_cast<SOCKET>(ctx->fd), ctx->event, &ne) == SOCKET_ERROR) {
+                continue;
+            }
+
+            const PollEvent translated = from_network_events(ne);
+            if (translated == PollEvent::None) continue;
+            PostQueuedCompletionStatus(iocp_, to_completion_bits(translated),
+                                       static_cast<ULONG_PTR>(ctx->fd), nullptr);
+        }
+    }
+
     void* wakeup_user_data_{nullptr};
     HANDLE iocp_{nullptr};
-    std::unordered_map<poll_fd_t, IocpSocketContext*> ctx_map_;
+    WSAEVENT update_event_{WSA_INVALID_EVENT};
+    std::unordered_map<poll_fd_t, std::shared_ptr<SocketContext>> ctx_map_;
+    std::mutex ctx_mutex_;
+    std::thread bridge_thread_;
+    std::atomic<bool> stopping_{false};
 };
 
 std::unique_ptr<IPoller> make_poller(void* wakeup_user_data) {

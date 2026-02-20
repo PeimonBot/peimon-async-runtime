@@ -14,8 +14,19 @@ namespace peimon {
 
 namespace {
 
+#ifdef _WIN32
+void ensure_winsock() {
+    static const bool ok = []() {
+        WSADATA d{};
+        return WSAStartup(MAKEWORD(2, 2), &d) == 0;
+    }();
+    if (!ok) throw std::runtime_error("WSAStartup failed");
+}
+#endif
+
 poll_fd_t create_tcp_socket() {
 #ifdef _WIN32
+    ensure_winsock();
     SOCKET s = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
     if (s == INVALID_SOCKET) {
         throw std::runtime_error("WSASocket failed");

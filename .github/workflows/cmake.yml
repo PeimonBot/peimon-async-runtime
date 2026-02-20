@@ -53,9 +53,14 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
+    env:
+      CMAKE_GENERATOR: "Visual Studio 17 2022"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup MSVC toolchain
+        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Clone vcpkg
         run: git clone https://github.com/microsoft/vcpkg.git vcpkg
@@ -75,6 +80,7 @@ jobs:
       - name: Configure
         run: |
           cmake -B build -S . `
+            -G "${{ env.CMAKE_GENERATOR }}" -A x64 `
             -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows
         shell: pwsh
