@@ -2,6 +2,7 @@
 #include "peimon/http_message.hpp"
 #include "peimon/tcp_socket.hpp"
 #include "peimon/tls_socket.hpp"
+#include <cstdint>
 #include <nghttp2/nghttp2.h>
 #if defined(__linux__)
 // Some Linux distros' libnghttp2 headers do not expose nghttp2_ssize
