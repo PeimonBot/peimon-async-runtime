@@ -118,7 +118,12 @@ void test_sleep_for_coroutine() {
 // --- TCP tests (listener + client echo) ---
 constexpr std::uint16_t TCP_TEST_PORT = 19090;
 
-// Read exactly n bytes (handles partial reads on kqueue/non-blocking sockets).
+// Delay before server closes the client socket so the peer can read the echo before EOF.
+// Needed on macOS/kqueue and helps on other platforms with different TCP shutdown ordering.
+constexpr auto TCP_SERVER_CLOSE_DELAY = 100ms;
+
+// Read exactly n bytes (handles partial reads on kqueue/epoll/non-blocking sockets).
+// Returns bytes read, or <=0 on error/EOF. Caller must treat 0 as connection closed.
 Task<std::ptrdiff_t> tcp_read_n(EventLoop& loop, TcpSocket& sock, void* buf, std::size_t n) {
     std::size_t total = 0;
     char* p = static_cast<char*>(buf);
@@ -161,7 +166,10 @@ Task<void> tcp_server_task(EventLoop& loop, TcpListener& listener, bool* accepte
     ASSERT_MSG(w == n, "TCP server must echo full read count");
     ASSERT(client.is_open());
     *echoed = true;
-    client.close();
+    // Delay closing so the client can read the echo before seeing EOF (see TCP_SERVER_CLOSE_DELAY).
+    // Wrap in shared_ptr so the timer callback is copyable (required by std::function).
+    auto client_ptr = std::make_shared<TcpSocket>(std::move(client));
+    loop.run_after(TCP_SERVER_CLOSE_DELAY, [client_ptr]() { client_ptr->close(); });
     std::cerr << "  [LOG] tcp_server_task: done\n";
 }
 
@@ -208,9 +216,11 @@ void test_tcp_echo() {
     Task<void> server = tcp_server_task(loop, listener, &accepted, &echoed);
     server.start(loop);
     Task<void> client;  // keep alive so start() callback does not use stack-after-return
-    // Platform-dependent delay so listener is ready and (on Windows) WSAEventSelect/IOCP bridge has registered it.
+    // Platform-dependent delay: listener must be ready; on Windows the WSAEventSelect/IOCP
+    // bridge thread needs time to include the listener in its wait set and to pick up
+    // accepted client sockets, so use a longer delay there.
 #ifdef _WIN32
-    const auto client_delay = 400ms;
+    const auto client_delay = 500ms;
 #else
     const auto client_delay = 50ms;
 #endif

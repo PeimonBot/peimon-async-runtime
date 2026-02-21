@@ -127,6 +127,17 @@ public:
         }
         ctx_map_[fd] = std::move(ctx);
         WSASetEvent(update_event_);
+        // If the socket already had data/state before WSAEventSelect (e.g. accepted client
+        // that already received data), the event may not be set. Enumerate and post any
+        // current network events so the EventLoop sees FD_READ/FD_WRITE without waiting.
+        WSANETWORKEVENTS ne{};
+        if (WSAEnumNetworkEvents(s, ctx_map_[fd]->event, &ne) == 0) {
+            const PollEvent translated = from_network_events(ne);
+            if (translated != PollEvent::None) {
+                PostQueuedCompletionStatus(iocp_, to_completion_bits(translated),
+                                           static_cast<ULONG_PTR>(fd), nullptr);
+            }
+        }
     }
 
     void modify(poll_fd_t fd, PollEvent events, void* user_data) override {
