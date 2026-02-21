@@ -109,12 +109,11 @@ jobs:
         working-directory: ${{ github.workspace }}
         timeout-minutes: 5
 
-  # Only output ALL_TESTS_PASSED when linux, macos, and windows all pass their test steps.
-  # Job runs only when all three build+test jobs succeed (needs: [...]); otherwise job is skipped.
+  # Only output all_tests_passed when linux, macos, and windows jobs are all green.
   all-passed:
     name: All tests passed
     needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
     steps:
       - name: All platforms passed
-        run: echo "ALL_TESTS_PASSED"
+        run: echo "all_tests_passed"

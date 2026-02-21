@@ -148,7 +148,34 @@ void EventLoop::run() {
                 // removed), and user_data could point to freed memory → segfault on macOS.
                 if (!keep) continue;
                 auto* cb = static_cast<Callback*>(e.user_data);
-                (*cb)();
+                (*cb)();  // Callback performs I/O (read/write) then unregisters and resumes coroutine.
+            }
+        }
+        // Drain readiness that appeared during callbacks (e.g. client wrote so server fd
+        // became readable). Use short wait so loopback TCP can deliver before we re-check.
+        if (poller_->wait(events, 5) > 0) {
+            for (const auto& e : events) {
+                if (e.user_data == this &&
+                    (e.fd == wakeup_fds_[0] || e.fd == static_cast<poll_fd_t>(-1))) {
+                    handle_wakeup();
+                }
+#if defined(__linux__)
+                else if (timerfd_ >= 0 && e.fd == static_cast<poll_fd_t>(timerfd_)) {
+                    uint64_t expirations = 0;
+                    while (read(static_cast<int>(timerfd_), &expirations, sizeof(expirations)) == sizeof(expirations) && expirations > 0)
+                        ;
+                    run_expired_timers();
+                    update_timerfd();
+                }
+#endif
+                else if (e.user_data) {
+                    std::shared_ptr<void> keep;
+                    auto it = fd_keep_alive_.find(e.fd);
+                    if (it != fd_keep_alive_.end()) keep = it->second;
+                    if (!keep) continue;
+                    auto* cb = static_cast<Callback*>(e.user_data);
+                    (*cb)();
+                }
             }
         }
         run_expired_timers();

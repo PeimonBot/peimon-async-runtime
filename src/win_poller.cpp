@@ -128,16 +128,26 @@ public:
         ctx_map_[fd] = std::move(ctx);
         WSASetEvent(update_event_);
         // If the socket already had data/state before WSAEventSelect (e.g. accepted client
-        // that already received data), the event may not be set. Enumerate and post any
+        // that already received data), the event may not be set yet. Enumerate and post any
         // current network events so the EventLoop sees FD_READ/FD_WRITE without waiting.
         WSANETWORKEVENTS ne{};
+        bool posted = false;
         if (WSAEnumNetworkEvents(s, ctx_map_[fd]->event, &ne) == 0) {
             const PollEvent translated = from_network_events(ne);
             if (translated != PollEvent::None) {
                 PostQueuedCompletionStatus(iocp_, to_completion_bits(translated),
                                            static_cast<ULONG_PTR>(fd),
                                            reinterpret_cast<LPOVERLAPPED>(ctx_map_[fd]->user_data));
+                posted = true;
             }
+        }
+        // For short-lived connections, data (and FD_CLOSE) can arrive before the bridge
+        // thread signals the event. Ensure at least one Read completion is queued so the
+        // read callback runs and does not lose already-queued data.
+        if ((events & PollEvent::Read) != PollEvent::None && !posted) {
+            PostQueuedCompletionStatus(iocp_, to_completion_bits(PollEvent::Read),
+                                       static_cast<ULONG_PTR>(fd),
+                                       reinterpret_cast<LPOVERLAPPED>(ctx_map_[fd]->user_data));
         }
     }
 

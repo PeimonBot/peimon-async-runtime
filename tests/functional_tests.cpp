@@ -118,10 +118,9 @@ void test_sleep_for_coroutine() {
 // --- TCP tests (listener + client echo) ---
 constexpr std::uint16_t TCP_TEST_PORT = 19090;
 
-// Delay before server closes the client socket so the peer can read the echo before EOF.
-// Needed on macOS/kqueue and helps on other platforms with different TCP shutdown ordering.
-// Use a delay long enough for CI (macOS runner may schedule timers and I/O with more latency).
-constexpr auto TCP_SERVER_CLOSE_DELAY = 200ms;
+// Explicit handshake: server does not close until client sends a single ack byte after
+// receiving the echo. This avoids races where the server closes before the client reads
+// (macOS/kqueue, Windows IOCP, and Linux epoll can reorder data and FIN).
 
 // Read exactly n bytes (handles partial reads on kqueue/epoll/non-blocking sockets).
 // Returns bytes read, or <=0 on error/EOF. Caller must treat 0 as connection closed.
@@ -167,10 +166,13 @@ Task<void> tcp_server_task(EventLoop& loop, TcpListener& listener, bool* accepte
     ASSERT_MSG(w == n, "TCP server must echo full read count");
     ASSERT(client.is_open());
     *echoed = true;
-    // Delay closing so the client can read the echo before seeing EOF (see TCP_SERVER_CLOSE_DELAY).
-    // Wrap in shared_ptr so the timer callback is copyable (required by std::function).
-    auto client_ptr = std::make_shared<TcpSocket>(std::move(client));
-    loop.run_after(TCP_SERVER_CLOSE_DELAY, [client_ptr]() { client_ptr->close(); });
+    // Wait for client to send a single ack byte so we know the client has received the echo
+    // before we close. This avoids races with FIN/data ordering across platforms.
+    char ack_byte;
+    std::ptrdiff_t ack_n = co_await tcp_read_n(loop, client, &ack_byte, 1);
+    (void)ack_n;  // 0 or 1 is fine; we close either way
+    std::cerr << "  [LOG] tcp_server_task: ack received, closing\n";
+    client.close();
     std::cerr << "  [LOG] tcp_server_task: done\n";
 }
 
@@ -182,6 +184,9 @@ Task<void> tcp_client_task(EventLoop& loop, bool* connected, bool* received) {
     std::cerr << "  [LOG] tcp_client_task: connect done, ec=" << ec.message() << "\n";
     ASSERT_MSG(!ec, "TCP client connect must succeed");
     *connected = true;
+    // Yield so server is in async_read before we send; avoids macOS EOF-before-data and
+    // Linux/Windows missed notification.
+    co_await sleep_for(loop, 20ms);
     const char* msg = "hello";
     std::size_t len = std::strlen(msg);
     ASSERT(len > 0u && len < 64u);
@@ -198,6 +203,10 @@ Task<void> tcp_client_task(EventLoop& loop, bool* connected, bool* received) {
     buf[static_cast<std::size_t>(n)] = '\0';
     ASSERT(std::strcmp(buf, msg) == 0);
     *received = true;
+    // Tell server we got the echo so it can close (avoids server closing before we read).
+    const char ack = '\x01';
+    std::ptrdiff_t aw = co_await tcp_write_n(loop, sock, &ack, 1);
+    (void)aw;
     sock.close();
     loop.stop();
     std::cerr << "  [LOG] tcp_client_task: done\n";
@@ -217,9 +226,8 @@ void test_tcp_echo() {
     Task<void> server = tcp_server_task(loop, listener, &accepted, &echoed);
     server.start(loop);
     Task<void> client;  // keep alive so start() callback does not use stack-after-return
-    // Delay before starting client so server registers the listener (required on Windows
-    // for IOCP bridge to include the listener). Synchronization: timeout below ensures we
-    // fail if echo never completes; client_delay only ensures listener is ready.
+    // Start client after a short delay so server has registered the listener (required on
+    // Windows for IOCP bridge). Client yields after connect so server reaches async_read before send.
 #ifdef _WIN32
     const auto client_delay = 500ms;
 #else

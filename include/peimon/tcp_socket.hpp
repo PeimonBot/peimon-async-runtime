@@ -274,6 +274,35 @@ public:
         state_->fd = socket_->fd();
         state_->buf = buf_;
         state_->len = len_;
+        // If data (or EOF) is already in the kernel buffer—e.g. data and FIN arrived
+        // before we registered—complete immediately so we don't miss it on epoll/kqueue/IOCP.
+#ifdef _WIN32
+        int n = recv(static_cast<SOCKET>(socket_->fd()), static_cast<char*>(buf_), static_cast<int>(len_), 0);
+        if (n >= 0) {
+            state_->result = n;
+            state_->loop->queue_in_loop([s = state_]() mutable { s->handle.resume(); });
+            return;
+        }
+        if (WSAGetLastError() != WSAEWOULDBLOCK) {
+            state_->result = -1;
+            state_->ec = std::error_code(WSAGetLastError(), std::system_category());
+            state_->loop->queue_in_loop([s = state_]() mutable { s->handle.resume(); });
+            return;
+        }
+#else
+        ssize_t n = ::read(static_cast<int>(socket_->fd()), buf_, len_);
+        if (n >= 0) {
+            state_->result = static_cast<std::ptrdiff_t>(n);
+            state_->loop->queue_in_loop([s = state_]() mutable { s->handle.resume(); });
+            return;
+        }
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            state_->result = -1;
+            state_->ec = std::error_code(errno, std::system_category());
+            state_->loop->queue_in_loop([s = state_]() mutable { s->handle.resume(); });
+            return;
+        }
+#endif
         state_->callback = [s = state_]() {
 #ifdef _WIN32
             int n = recv(static_cast<SOCKET>(s->fd), static_cast<char*>(s->buf), static_cast<int>(s->len), 0);
