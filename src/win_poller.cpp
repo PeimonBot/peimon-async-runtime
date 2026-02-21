@@ -27,6 +27,12 @@ struct SocketContext {
     void* user_data{nullptr};
     PollEvent events{PollEvent::None};
     WSAEVENT event{WSA_INVALID_EVENT};
+    ~SocketContext() {
+        if (event != WSA_INVALID_EVENT) {
+            WSACloseEvent(event);
+            event = WSA_INVALID_EVENT;
+        }
+    }
 };
 
 constexpr DWORD to_completion_bits(PollEvent events) {
@@ -145,7 +151,8 @@ public:
             WSASetEvent(update_event_);
         }
         WSAEventSelect(static_cast<SOCKET>(fd), nullptr, 0);
-        if (removed->event != WSA_INVALID_EVENT) WSACloseEvent(removed->event);
+        // Do not WSACloseEvent here: bridge thread may still hold a copy of this context.
+        // Event is closed in SocketContext destructor when last shared_ptr is released.
     }
 
     int wait(std::vector<FdEvent>& out_events, int timeout_ms) override {

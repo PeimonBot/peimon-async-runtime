@@ -108,3 +108,10 @@ jobs:
         shell: pwsh
         working-directory: ${{ github.workspace }}
         timeout-minutes: 5
+
+  all-passed:
+    name: All tests passed
+    needs: [build-linux, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "ALL_TESTS_PASSED"

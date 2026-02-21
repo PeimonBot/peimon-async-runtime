@@ -144,8 +144,9 @@ void test_tcp_echo() {
     bool accepted = false, echoed = false, connected = false, received = false;
     Task<void> server = tcp_server_task(loop, listener, &accepted, &echoed);
     server.start(loop);
+    Task<void> client;  // keep alive so start() callback does not use stack-after-return
     loop.run_after(20ms, [&]() {
-        Task<void> client = tcp_client_task(loop, &connected, &received);
+        client = tcp_client_task(loop, &connected, &received);
         client.start(loop);
     });
     loop.run();
@@ -196,10 +197,11 @@ void test_udp_send_recv() {
     std::string payload;
     Task<void> r = udp_recv_task(loop, recv_sock, &got, &payload);
     r.start(loop);
+    Task<void> s;  // keep alive so start() callback does not use stack-after-return
     loop.run_after(20ms, [&]() {
-        Task<void> s = udp_send_task(loop, send_sock,
-                                     reinterpret_cast<const sockaddr*>(&addr), sizeof(addr),
-                                     "udp_hello", &sent);
+        s = udp_send_task(loop, send_sock,
+                          reinterpret_cast<const sockaddr*>(&addr), sizeof(addr),
+                          "udp_hello", &sent);
         s.start(loop);
     });
     loop.run();
