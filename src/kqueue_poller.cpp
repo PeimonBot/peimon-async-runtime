@@ -3,6 +3,7 @@
 #include <cstring>
 #include <sys/event.h>
 #include <unistd.h>
+#include <unordered_map>
 #include <vector>
 
 namespace peimon {
@@ -56,18 +57,26 @@ public:
         if (n < 0 && errno != EINTR) return -1;
         if (n <= 0) return n;
         out_events.clear();
-        out_events.reserve(static_cast<std::size_t>(n));
+        // Merge multiple events for the same fd (e.g. EVFILT_READ and EVFILT_WRITE) into one
+        // so the callback is invoked only once. Double invocation would double-resume the
+        // coroutine and cause undefined behavior / segfault.
+        std::unordered_map<poll_fd_t, FdEvent> by_fd;
         for (int i = 0; i < n; ++i) {
-            FdEvent e;
-            e.fd = static_cast<poll_fd_t>(events[i].ident);
-            e.events = PollEvent::None;
-            if (events[i].filter == EVFILT_READ) e.events = e.events | PollEvent::Read;
-            if (events[i].filter == EVFILT_WRITE) e.events = e.events | PollEvent::Write;
-            if (events[i].flags & EV_ERROR) e.events = e.events | PollEvent::Error;
-            e.user_data = events[i].udata;
-            out_events.push_back(e);
+            const poll_fd_t fd = static_cast<poll_fd_t>(events[i].ident);
+            PollEvent ev = PollEvent::None;
+            if (events[i].filter == EVFILT_READ) ev = ev | PollEvent::Read;
+            if (events[i].filter == EVFILT_WRITE) ev = ev | PollEvent::Write;
+            if (events[i].flags & EV_ERROR) ev = ev | PollEvent::Error;
+            auto it = by_fd.find(fd);
+            if (it == by_fd.end()) {
+                by_fd[fd] = FdEvent{fd, ev, events[i].udata};
+            } else {
+                it->second.events = it->second.events | ev;
+            }
         }
-        return n;
+        out_events.reserve(by_fd.size());
+        for (auto& [fd, e] : by_fd) out_events.push_back(std::move(e));
+        return static_cast<int>(out_events.size());
     }
 
 private:

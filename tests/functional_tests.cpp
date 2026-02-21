@@ -172,11 +172,11 @@ void test_tcp_echo() {
     Task<void> client;  // keep alive so start() callback does not use stack-after-return
     // Platform-dependent delay so listener is ready and (on Windows) IOCP bridge has registered it.
 #ifdef _WIN32
-    const auto client_delay = 150ms;
+    const auto client_delay = 250ms;
 #else
     const auto client_delay = 50ms;
 #endif
-    const auto timeout = 5000ms;  // Safety: fail instead of hang on slow CI
+    const auto timeout = 10000ms;  // Safety: fail instead of hang on slow CI
     loop.run_after(client_delay, [&]() {
         client = tcp_client_task(loop, &connected, &received);
         client.start(loop);
@@ -193,7 +193,8 @@ void test_tcp_echo() {
     ASSERT(echoed);
     ASSERT(connected);
     ASSERT(received);
-    listener.close();  // Release port and unregister from poller before next test
+    // Release port and unregister from poller so the next test or run can rebind.
+    listener.close();
 }
 
 // --- UDP tests ---
@@ -249,6 +250,7 @@ void test_udp_send_recv() {
     ASSERT(sent);
     ASSERT(got);
     ASSERT(payload == "udp_hello");
+    // Unregister and close so ports are released.
     recv_sock.close();
     send_sock.close();
 }
