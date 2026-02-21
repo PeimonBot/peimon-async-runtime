@@ -103,14 +103,38 @@ void test_sleep_for_coroutine() {
 // --- TCP tests (listener + client echo) ---
 constexpr std::uint16_t TCP_TEST_PORT = 19090;
 
+// Read exactly n bytes (handles partial reads on kqueue/non-blocking sockets).
+Task<std::ptrdiff_t> tcp_read_n(EventLoop& loop, TcpSocket& sock, void* buf, std::size_t n) {
+    std::size_t total = 0;
+    char* p = static_cast<char*>(buf);
+    while (total < n && sock.is_open()) {
+        std::ptrdiff_t r = co_await sock.async_read(loop, p + total, n - total);
+        if (r <= 0) co_return total > 0 ? static_cast<std::ptrdiff_t>(total) : r;
+        total += static_cast<std::size_t>(r);
+    }
+    co_return static_cast<std::ptrdiff_t>(total);
+}
+
+// Write exactly n bytes (handles partial writes).
+Task<std::ptrdiff_t> tcp_write_n(EventLoop& loop, TcpSocket& sock, const void* buf, std::size_t n) {
+    std::size_t total = 0;
+    const char* p = static_cast<const char*>(buf);
+    while (total < n && sock.is_open()) {
+        std::ptrdiff_t w = co_await sock.async_write(loop, p + total, n - total);
+        if (w <= 0) co_return total > 0 ? static_cast<std::ptrdiff_t>(total) : w;
+        total += static_cast<std::size_t>(w);
+    }
+    co_return static_cast<std::ptrdiff_t>(total);
+}
+
 Task<void> tcp_server_task(EventLoop& loop, TcpListener& listener, bool* accepted, bool* echoed) {
     TcpSocket client = co_await listener.async_accept(loop);
     *accepted = true;
     ASSERT(client.is_open());
     char buf[64];
-    std::ptrdiff_t n = co_await client.async_read(loop, buf, sizeof(buf));
+    std::ptrdiff_t n = co_await tcp_read_n(loop, client, buf, sizeof(buf));
     ASSERT(n > 0);
-    std::ptrdiff_t w = co_await client.async_write(loop, buf, static_cast<std::size_t>(n));
+    std::ptrdiff_t w = co_await tcp_write_n(loop, client, buf, static_cast<std::size_t>(n));
     ASSERT(w == n);
     *echoed = true;
     client.close();
@@ -123,10 +147,10 @@ Task<void> tcp_client_task(EventLoop& loop, bool* connected, bool* received) {
     *connected = true;
     const char* msg = "hello";
     std::size_t len = std::strlen(msg);
-    std::ptrdiff_t w = co_await sock.async_write(loop, msg, len);
+    std::ptrdiff_t w = co_await tcp_write_n(loop, sock, msg, len);
     ASSERT(w == static_cast<std::ptrdiff_t>(len));
     char buf[64];
-    std::ptrdiff_t n = co_await sock.async_read(loop, buf, sizeof(buf));
+    std::ptrdiff_t n = co_await tcp_read_n(loop, sock, buf, len);
     ASSERT(n == static_cast<std::ptrdiff_t>(len));
     buf[n] = '\0';
     ASSERT(std::strcmp(buf, msg) == 0);
@@ -142,20 +166,29 @@ void test_tcp_echo() {
     listener.bind("127.0.0.1", TCP_TEST_PORT);
     listener.listen(1);
     bool accepted = false, echoed = false, connected = false, received = false;
+    bool timed_out = false;
     Task<void> server = tcp_server_task(loop, listener, &accepted, &echoed);
     server.start(loop);
     Task<void> client;  // keep alive so start() callback does not use stack-after-return
-    // On Windows, give the IOCP bridge thread time to register the listener before client connects.
+    // Platform-dependent delay so listener is ready and (on Windows) IOCP bridge has registered it.
 #ifdef _WIN32
-    const auto client_delay = 50ms;
+    const auto client_delay = 150ms;
 #else
-    const auto client_delay = 20ms;
+    const auto client_delay = 50ms;
 #endif
+    const auto timeout = 5000ms;  // Safety: fail instead of hang on slow CI
     loop.run_after(client_delay, [&]() {
         client = tcp_client_task(loop, &connected, &received);
         client.start(loop);
     });
+    loop.run_after(timeout, [&]() {
+        if (!received) {
+            timed_out = true;
+            loop.stop();
+        }
+    });
     loop.run();
+    ASSERT_MSG(!timed_out, "TCP echo test timed out");
     ASSERT(accepted);
     ASSERT(echoed);
     ASSERT(connected);
@@ -205,7 +238,8 @@ void test_udp_send_recv() {
     Task<void> r = udp_recv_task(loop, recv_sock, &got, &payload);
     r.start(loop);
     Task<void> s;  // keep alive so start() callback does not use stack-after-return
-    loop.run_after(20ms, [&]() {
+    // Delay so recv is registered before send (resilient to timing across runners).
+    loop.run_after(50ms, [&]() {
         s = udp_send_task(loop, send_sock,
                           reinterpret_cast<const sockaddr*>(&addr), sizeof(addr),
                           "udp_hello", &sent);

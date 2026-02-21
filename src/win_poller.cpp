@@ -221,7 +221,8 @@ private:
             events.push_back(update_event_);
             for (const auto& ctx : contexts) events.push_back(ctx->event);
 
-            const DWORD timeout_ms = contexts.empty() ? 200 : 1000;
+            // Short timeout when sockets exist so new fds (e.g. accepted client) are picked up quickly.
+            const DWORD timeout_ms = contexts.empty() ? 200 : 200;
             const DWORD rv = WSAWaitForMultipleEvents(
                 static_cast<DWORD>(events.size()), events.data(), FALSE, timeout_ms, FALSE);
 
