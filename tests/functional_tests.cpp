@@ -170,9 +170,9 @@ void test_tcp_echo() {
     Task<void> server = tcp_server_task(loop, listener, &accepted, &echoed);
     server.start(loop);
     Task<void> client;  // keep alive so start() callback does not use stack-after-return
-    // Platform-dependent delay so listener is ready and (on Windows) IOCP bridge has registered it.
+    // Platform-dependent delay so listener is ready and (on Windows) WSAEventSelect/IOCP bridge has registered it.
 #ifdef _WIN32
-    const auto client_delay = 250ms;
+    const auto client_delay = 400ms;
 #else
     const auto client_delay = 50ms;
 #endif
@@ -188,13 +188,15 @@ void test_tcp_echo() {
         }
     });
     loop.run();
+
+    // Clean up listener and port first so they are released even on timeout or assertion failure.
+    listener.close();
+
     ASSERT_MSG(!timed_out, "TCP echo test timed out");
     ASSERT(accepted);
     ASSERT(echoed);
     ASSERT(connected);
     ASSERT(received);
-    // Release port and unregister from poller so the next test or run can rebind.
-    listener.close();
 }
 
 // --- UDP tests ---

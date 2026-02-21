@@ -40,10 +40,13 @@ public:
     }
 
     void remove(poll_fd_t fd) override {
+        // Guard: avoid operating on invalid fd (e.g. -1); prevents use-after-close with reused fd.
+        if (fd < 0 || kq_ < 0) return;
         struct kevent ev[2];
         EV_SET(&ev[0], fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
         EV_SET(&ev[1], fd, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
-        kevent(kq_, ev, 2, nullptr, 0, nullptr);
+        // Ignore errors: fd may already be removed or closed; idempotent remove avoids double-close issues.
+        (void)kevent(kq_, ev, 2, nullptr, 0, nullptr);
     }
 
     int wait(std::vector<FdEvent>& out_events, int timeout_ms) override {
@@ -63,6 +66,7 @@ public:
         std::unordered_map<poll_fd_t, FdEvent> by_fd;
         for (int i = 0; i < n; ++i) {
             const poll_fd_t fd = static_cast<poll_fd_t>(events[i].ident);
+            if (fd < 0) continue;  // Skip invalid ident (e.g. after close/reuse)
             PollEvent ev = PollEvent::None;
             if (events[i].filter == EVFILT_READ) ev = ev | PollEvent::Read;
             if (events[i].filter == EVFILT_WRITE) ev = ev | PollEvent::Write;

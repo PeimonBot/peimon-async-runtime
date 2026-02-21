@@ -221,8 +221,9 @@ private:
             events.push_back(update_event_);
             for (const auto& ctx : contexts) events.push_back(ctx->event);
 
-            // Short timeout when sockets exist so new fds (e.g. accepted client) are picked up quickly.
-            const DWORD timeout_ms = contexts.empty() ? 200 : 50;
+            // Short timeout when sockets exist so new fds (e.g. accepted client, connecting client)
+            // are picked up quickly; IOCP must receive notifications for connection readiness.
+            const DWORD timeout_ms = contexts.empty() ? 100 : 25;
             const DWORD rv = WSAWaitForMultipleEvents(
                 static_cast<DWORD>(events.size()), events.data(), FALSE, timeout_ms, FALSE);
 
@@ -240,7 +241,8 @@ private:
             if (WSAEnumNetworkEvents(static_cast<SOCKET>(ctx->fd), ctx->event, &ne) == SOCKET_ERROR) {
                 continue;
             }
-
+            // Ensure connection readiness (FD_CONNECT) and accept (FD_ACCEPT) are delivered to IOCP
+            // so the main thread can run connect/accept callbacks; translated already maps these to Read/Write.
             const PollEvent translated = from_network_events(ne);
             if (translated == PollEvent::None) continue;
             PostQueuedCompletionStatus(iocp_, to_completion_bits(translated),
