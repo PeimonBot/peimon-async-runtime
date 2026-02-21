@@ -120,7 +120,8 @@ constexpr std::uint16_t TCP_TEST_PORT = 19090;
 
 // Delay before server closes the client socket so the peer can read the echo before EOF.
 // Needed on macOS/kqueue and helps on other platforms with different TCP shutdown ordering.
-constexpr auto TCP_SERVER_CLOSE_DELAY = 100ms;
+// Use a delay long enough for CI (macOS runner may schedule timers and I/O with more latency).
+constexpr auto TCP_SERVER_CLOSE_DELAY = 200ms;
 
 // Read exactly n bytes (handles partial reads on kqueue/epoll/non-blocking sockets).
 // Returns bytes read, or <=0 on error/EOF. Caller must treat 0 as connection closed.
