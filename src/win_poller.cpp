@@ -226,7 +226,9 @@ private:
             for (const auto& ctx : contexts) events.push_back(ctx->event);
 
             // Short timeout when sockets exist so new fds (e.g. accepted client, connecting client)
-            // are picked up quickly; IOCP must receive notifications for connection readiness.
+            // are picked up quickly. FD_READ, FD_WRITE, FD_ACCEPT, FD_CLOSE are all signaled via
+            // WSAEventSelect to these events; we translate and post to IOCP so EventLoop::run()
+            // consumes them via GetQueuedCompletionStatus and dispatches callbacks.
             const DWORD timeout_ms = contexts.empty() ? 100 : 25;
             const DWORD rv = WSAWaitForMultipleEvents(
                 static_cast<DWORD>(events.size()), events.data(), FALSE, timeout_ms, FALSE);
@@ -240,17 +242,42 @@ private:
             }
             if (idx >= events.size()) continue;
 
+            // Post the signaled socket's events to IOCP so the main thread runs the callback.
             const auto& ctx = contexts[idx - 1];
             WSANETWORKEVENTS ne{};
             if (WSAEnumNetworkEvents(static_cast<SOCKET>(ctx->fd), ctx->event, &ne) == SOCKET_ERROR) {
                 continue;
             }
-            // Ensure connection readiness (FD_CONNECT) and accept (FD_ACCEPT) are delivered to IOCP
-            // so the main thread can run connect/accept callbacks; translated already maps these to Read/Write.
             const PollEvent translated = from_network_events(ne);
-            if (translated == PollEvent::None) continue;
-            PostQueuedCompletionStatus(iocp_, to_completion_bits(translated),
-                                       static_cast<ULONG_PTR>(ctx->fd), nullptr);
+            if (translated != PollEvent::None) {
+                PostQueuedCompletionStatus(iocp_, to_completion_bits(translated),
+                                           static_cast<ULONG_PTR>(ctx->fd), nullptr);
+            }
+
+            // Drain any other signaled socket events (timeout 0) so FD_READ/FD_WRITE/FD_ACCEPT/FD_CLOSE
+            // are all delivered to IOCP in one pass and the EventLoop can consume them without delay.
+            while (true) {
+                const DWORD drain_rv = WSAWaitForMultipleEvents(
+                    static_cast<DWORD>(events.size()), events.data(), FALSE, 0, FALSE);
+                if (drain_rv == WSA_WAIT_TIMEOUT || drain_rv == WSA_WAIT_FAILED) break;
+                const DWORD drain_idx = drain_rv - WSA_WAIT_EVENT_0;
+                if (drain_idx == 0) {
+                    WSAResetEvent(update_event_);
+                    break;
+                }
+                if (drain_idx >= events.size()) break;
+                const auto& drain_ctx = contexts[drain_idx - 1];
+                WSANETWORKEVENTS drain_ne{};
+                if (WSAEnumNetworkEvents(static_cast<SOCKET>(drain_ctx->fd), drain_ctx->event, &drain_ne)
+                    == SOCKET_ERROR) {
+                    break;
+                }
+                const PollEvent drain_translated = from_network_events(drain_ne);
+                if (drain_translated != PollEvent::None) {
+                    PostQueuedCompletionStatus(iocp_, to_completion_bits(drain_translated),
+                                              static_cast<ULONG_PTR>(drain_ctx->fd), nullptr);
+                }
+            }
         }
     }
 

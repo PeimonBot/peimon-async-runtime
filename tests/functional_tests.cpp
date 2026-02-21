@@ -149,14 +149,17 @@ Task<void> tcp_server_task(EventLoop& loop, TcpListener& listener, bool* accepte
     *accepted = true;
     ASSERT(client.is_open());
     char buf[64];
+    static constexpr std::size_t buf_size = sizeof(buf);
     std::cerr << "  [LOG] tcp_server_task: async_read\n";
-    std::ptrdiff_t n = co_await tcp_read_n(loop, client, buf, sizeof(buf));
+    std::ptrdiff_t n = co_await tcp_read_n(loop, client, buf, buf_size);
     std::cerr << "  [LOG] tcp_server_task: read " << n << " bytes\n";
-    ASSERT(n > 0);
+    ASSERT_MSG(n > 0, "TCP server read must receive at least 1 byte");
+    ASSERT_MSG(n <= static_cast<std::ptrdiff_t>(buf_size), "TCP server read must not exceed buffer");
     std::cerr << "  [LOG] tcp_server_task: async_write\n";
     std::ptrdiff_t w = co_await tcp_write_n(loop, client, buf, static_cast<std::size_t>(n));
     std::cerr << "  [LOG] tcp_server_task: wrote " << w << " bytes\n";
-    ASSERT(w == n);
+    ASSERT_MSG(w == n, "TCP server must echo full read count");
+    ASSERT(client.is_open());
     *echoed = true;
     client.close();
     std::cerr << "  [LOG] tcp_server_task: done\n";
@@ -165,22 +168,25 @@ Task<void> tcp_server_task(EventLoop& loop, TcpListener& listener, bool* accepte
 Task<void> tcp_client_task(EventLoop& loop, bool* connected, bool* received) {
     std::cerr << "  [LOG] tcp_client_task: make_tcp_socket, async_connect\n";
     TcpSocket sock = make_tcp_socket();
+    ASSERT(sock.is_open());
     std::error_code ec = co_await sock.async_connect(loop, "127.0.0.1", TCP_TEST_PORT);
     std::cerr << "  [LOG] tcp_client_task: connect done, ec=" << ec.message() << "\n";
-    ASSERT(!ec);
+    ASSERT_MSG(!ec, "TCP client connect must succeed");
     *connected = true;
     const char* msg = "hello";
     std::size_t len = std::strlen(msg);
+    ASSERT(len > 0u && len < 64u);
     std::cerr << "  [LOG] tcp_client_task: async_write\n";
     std::ptrdiff_t w = co_await tcp_write_n(loop, sock, msg, len);
     std::cerr << "  [LOG] tcp_client_task: wrote " << w << "\n";
-    ASSERT(w == static_cast<std::ptrdiff_t>(len));
+    ASSERT_MSG(w == static_cast<std::ptrdiff_t>(len), "TCP client must write full message");
     char buf[64];
     std::cerr << "  [LOG] tcp_client_task: async_read\n";
     std::ptrdiff_t n = co_await tcp_read_n(loop, sock, buf, len);
     std::cerr << "  [LOG] tcp_client_task: read " << n << "\n";
-    ASSERT(n == static_cast<std::ptrdiff_t>(len));
-    buf[n] = '\0';
+    ASSERT_MSG(n == static_cast<std::ptrdiff_t>(len), "TCP client must read full echo");
+    ASSERT_MSG(n >= 0 && static_cast<std::size_t>(n) < sizeof(buf), "TCP read count in range for null term");
+    buf[static_cast<std::size_t>(n)] = '\0';
     ASSERT(std::strcmp(buf, msg) == 0);
     *received = true;
     sock.close();
@@ -229,10 +235,10 @@ void test_tcp_echo() {
     listener.close();
 
     ASSERT_MSG(!timed_out, "TCP echo test timed out");
-    ASSERT(accepted);
-    ASSERT(echoed);
-    ASSERT(connected);
-    ASSERT(received);
+    ASSERT_MSG(accepted, "TCP echo test: server must accept a connection");
+    ASSERT_MSG(echoed, "TCP echo test: server must echo back received data");
+    ASSERT_MSG(connected, "TCP echo test: client must connect");
+    ASSERT_MSG(received, "TCP echo test: client must receive echo");
     std::cerr << "  [LOG] test_tcp_echo: done\n";
 }
 

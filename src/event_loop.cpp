@@ -143,6 +143,10 @@ void EventLoop::run() {
                 std::shared_ptr<void> keep;
                 auto it = fd_keep_alive_.find(e.fd);
                 if (it != fd_keep_alive_.end()) keep = it->second;
+                // Only invoke callback if fd is still registered (keep exists). Otherwise the
+                // event may be stale (e.g. kqueue returned an event for an fd that was already
+                // removed), and user_data could point to freed memory → segfault on macOS.
+                if (!keep) continue;
                 auto* cb = static_cast<Callback*>(e.user_data);
                 (*cb)();
             }

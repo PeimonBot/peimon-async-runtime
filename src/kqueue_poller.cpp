@@ -53,6 +53,10 @@ public:
 
     int wait(std::vector<FdEvent>& out_events, int timeout_ms) override {
         static constexpr std::size_t max_events = 64;
+        // Stack-allocated; kevent() fills these. We only read ident/udata from kernel-filled
+        // structs. udata was stored at EV_ADD time; if the fd was removed before this wait
+        // returned, the event can still be in the queue (EV_DELETE is async). EventLoop must
+        // validate fd is still registered before using user_data (see event_loop.cpp).
         struct kevent events[max_events];
         struct timespec ts;
         ts.tv_sec = timeout_ms / 1000;
