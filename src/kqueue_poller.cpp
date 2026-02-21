@@ -76,6 +76,8 @@ public:
             PollEvent ev = PollEvent::None;
             if (events[i].filter == EVFILT_READ) ev = ev | PollEvent::Read;
             if (events[i].filter == EVFILT_WRITE) ev = ev | PollEvent::Write;
+            // EV_ERROR only (not EV_EOF): do not treat EOF as Error so the handler can read
+            // remaining data first; EV_EOF may be set with EVFILT_READ when peer closed.
             if (events[i].flags & EV_ERROR) ev = ev | PollEvent::Error;
             auto it = by_fd.find(fd);
             if (it == by_fd.end()) {

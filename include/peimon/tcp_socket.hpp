@@ -275,17 +275,37 @@ public:
         state_->buf = buf_;
         state_->len = len_;
         state_->callback = [s = state_]() {
-            s->loop->unregister_fd(s->fd);
 #ifdef _WIN32
             int n = recv(static_cast<SOCKET>(s->fd), static_cast<char*>(s->buf), static_cast<int>(s->len), 0);
-            s->result = n;
-            if (n < 0) s->ec = std::error_code(WSAGetLastError(), std::system_category());
+            if (n >= 0) {
+                s->result = n;
+            } else {
+                const int err = WSAGetLastError();
+                if (err != WSAEWOULDBLOCK) {
+                    s->result = -1;
+                    s->ec = std::error_code(err, std::system_category());
+                }
+                // WSAEWOULDBLOCK: leave fd registered, do not resume; wait for next FD_READ
+                if (err == WSAEWOULDBLOCK) return;
+            }
+            s->loop->unregister_fd(s->fd);
+            s->handle.resume();
 #else
             ssize_t n = ::read(static_cast<int>(s->fd), s->buf, s->len);
-            s->result = static_cast<std::ptrdiff_t>(n);
-            if (n < 0) s->ec = std::error_code(errno, std::system_category());
-#endif
+            if (n >= 0) {
+                s->result = static_cast<std::ptrdiff_t>(n);
+            } else {
+                const int err = errno;
+                if (err != EAGAIN && err != EWOULDBLOCK) {
+                    s->result = -1;
+                    s->ec = std::error_code(err, std::system_category());
+                }
+                // EAGAIN/EWOULDBLOCK: leave fd registered, do not resume
+                if (err == EAGAIN || err == EWOULDBLOCK) return;
+            }
+            s->loop->unregister_fd(s->fd);
             s->handle.resume();
+#endif
         };
         loop_->register_fd(socket_->fd(), PollEvent::Read, &state_->callback,
                           std::shared_ptr<void>(state_));
@@ -333,17 +353,35 @@ public:
         state_->buf = buf_;
         state_->len = len_;
         state_->callback = [s = state_]() {
-            s->loop->unregister_fd(s->fd);
 #ifdef _WIN32
             int n = send(static_cast<SOCKET>(s->fd), static_cast<const char*>(s->buf), static_cast<int>(s->len), 0);
-            s->result = n;
-            if (n < 0) s->ec = std::error_code(WSAGetLastError(), std::system_category());
+            if (n >= 0) {
+                s->result = n;
+            } else {
+                const int err = WSAGetLastError();
+                if (err != WSAEWOULDBLOCK) {
+                    s->result = -1;
+                    s->ec = std::error_code(err, std::system_category());
+                }
+                if (err == WSAEWOULDBLOCK) return;
+            }
+            s->loop->unregister_fd(s->fd);
+            s->handle.resume();
 #else
             ssize_t n = ::write(static_cast<int>(s->fd), s->buf, s->len);
-            s->result = static_cast<std::ptrdiff_t>(n);
-            if (n < 0) s->ec = std::error_code(errno, std::system_category());
-#endif
+            if (n >= 0) {
+                s->result = static_cast<std::ptrdiff_t>(n);
+            } else {
+                const int err = errno;
+                if (err != EAGAIN && err != EWOULDBLOCK) {
+                    s->result = -1;
+                    s->ec = std::error_code(err, std::system_category());
+                }
+                if (err == EAGAIN || err == EWOULDBLOCK) return;
+            }
+            s->loop->unregister_fd(s->fd);
             s->handle.resume();
+#endif
         };
         loop_->register_fd(socket_->fd(), PollEvent::Write, &state_->callback,
                           std::shared_ptr<void>(state_));

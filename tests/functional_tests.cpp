@@ -217,9 +217,9 @@ void test_tcp_echo() {
     Task<void> server = tcp_server_task(loop, listener, &accepted, &echoed);
     server.start(loop);
     Task<void> client;  // keep alive so start() callback does not use stack-after-return
-    // Platform-dependent delay: listener must be ready; on Windows the WSAEventSelect/IOCP
-    // bridge thread needs time to include the listener in its wait set and to pick up
-    // accepted client sockets, so use a longer delay there.
+    // Delay before starting client so server registers the listener (required on Windows
+    // for IOCP bridge to include the listener). Synchronization: timeout below ensures we
+    // fail if echo never completes; client_delay only ensures listener is ready.
 #ifdef _WIN32
     const auto client_delay = 500ms;
 #else

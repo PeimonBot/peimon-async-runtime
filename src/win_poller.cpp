@@ -135,7 +135,8 @@ public:
             const PollEvent translated = from_network_events(ne);
             if (translated != PollEvent::None) {
                 PostQueuedCompletionStatus(iocp_, to_completion_bits(translated),
-                                           static_cast<ULONG_PTR>(fd), nullptr);
+                                           static_cast<ULONG_PTR>(fd),
+                                           reinterpret_cast<LPOVERLAPPED>(ctx_map_[fd]->user_data));
             }
         }
     }
@@ -201,13 +202,9 @@ public:
             if (key == reinterpret_cast<ULONG_PTR>(&s_stop_key)) return -1;
 
             const poll_fd_t fd = static_cast<poll_fd_t>(key);
-            void* user_data = nullptr;
-            {
-                std::lock_guard lock(ctx_mutex_);
-                auto it = ctx_map_.find(fd);
-                if (it == ctx_map_.end()) continue;
-                user_data = it->second->user_data;
-            }
+            // user_data was passed at post time (LPOVERLAPPED) so the correct callback is
+            // invoked even if the fd was re-registered before this completion was processed.
+            void* user_data = reinterpret_cast<void*>(ov);
             out_events.push_back(FdEvent{fd, from_completion_bits(bytes), user_data});
         }
 
@@ -262,7 +259,8 @@ private:
             const PollEvent translated = from_network_events(ne);
             if (translated != PollEvent::None) {
                 PostQueuedCompletionStatus(iocp_, to_completion_bits(translated),
-                                           static_cast<ULONG_PTR>(ctx->fd), nullptr);
+                                           static_cast<ULONG_PTR>(ctx->fd),
+                                           reinterpret_cast<LPOVERLAPPED>(ctx->user_data));
             }
 
             // Drain any other signaled socket events (timeout 0) so FD_READ/FD_WRITE/FD_ACCEPT/FD_CLOSE
@@ -286,7 +284,8 @@ private:
                 const PollEvent drain_translated = from_network_events(drain_ne);
                 if (drain_translated != PollEvent::None) {
                     PostQueuedCompletionStatus(iocp_, to_completion_bits(drain_translated),
-                                              static_cast<ULONG_PTR>(drain_ctx->fd), nullptr);
+                                              static_cast<ULONG_PTR>(drain_ctx->fd),
+                                              reinterpret_cast<LPOVERLAPPED>(drain_ctx->user_data));
                 }
             }
         }
