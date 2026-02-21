@@ -145,7 +145,13 @@ void test_tcp_echo() {
     Task<void> server = tcp_server_task(loop, listener, &accepted, &echoed);
     server.start(loop);
     Task<void> client;  // keep alive so start() callback does not use stack-after-return
-    loop.run_after(20ms, [&]() {
+    // On Windows, give the IOCP bridge thread time to register the listener before client connects.
+#ifdef _WIN32
+    const auto client_delay = 50ms;
+#else
+    const auto client_delay = 20ms;
+#endif
+    loop.run_after(client_delay, [&]() {
         client = tcp_client_task(loop, &connected, &received);
         client.start(loop);
     });
@@ -154,6 +160,7 @@ void test_tcp_echo() {
     ASSERT(echoed);
     ASSERT(connected);
     ASSERT(received);
+    listener.close();  // Release port and unregister from poller before next test
 }
 
 // --- UDP tests ---
@@ -208,6 +215,8 @@ void test_udp_send_recv() {
     ASSERT(sent);
     ASSERT(got);
     ASSERT(payload == "udp_hello");
+    recv_sock.close();
+    send_sock.close();
 }
 
 }  // namespace

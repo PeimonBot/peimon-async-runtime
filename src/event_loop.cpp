@@ -193,11 +193,18 @@ void EventLoop::wakeup() {
 
 void EventLoop::handle_wakeup() {
 #ifndef _WIN32
+    // Drain wakeup pipe so epoll/kqueue stops reporting read; non-blocking so we never block.
     char buf[256];
     ssize_t n;
-    while ((n = read(static_cast<int>(wakeup_fds_[0]), buf, sizeof(buf))) > 0)
-        ;
-    (void)n;  // EAGAIN/EWOULDBLOCK when non-blocking and empty is expected
+    while (true) {
+        n = read(static_cast<int>(wakeup_fds_[0]), buf, sizeof(buf));
+        if (n > 0) continue;
+        if (n < 0 && errno == EINTR) continue;
+        break;  // 0 (EOF) or EAGAIN/EWOULDBLOCK when drained
+    }
+    (void)n;
+#else
+    // Windows: wakeup is signaled via IOCP (PostQueuedCompletionStatus); nothing to drain here.
 #endif
 }
 
