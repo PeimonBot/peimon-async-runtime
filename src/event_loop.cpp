@@ -140,6 +140,9 @@ void EventLoop::run() {
             }
 #endif
             else if (e.user_data) {
+                std::shared_ptr<void> keep;
+                auto it = fd_keep_alive_.find(e.fd);
+                if (it != fd_keep_alive_.end()) keep = it->second;
                 auto* cb = static_cast<Callback*>(e.user_data);
                 (*cb)();
             }
@@ -170,11 +173,14 @@ void EventLoop::queue_in_loop(Callback cb) {
     run_in_loop(std::move(cb));
 }
 
-void EventLoop::register_fd(poll_fd_t fd, PollEvent events, void* user_data) {
+void EventLoop::register_fd(poll_fd_t fd, PollEvent events, void* user_data,
+                            std::shared_ptr<void> keep_alive) {
+    if (keep_alive) fd_keep_alive_[fd] = keep_alive;
     poller_->add(fd, events, user_data);
 }
 
 void EventLoop::unregister_fd(poll_fd_t fd) {
+    fd_keep_alive_.erase(fd);
     poller_->remove(fd);
 }
 

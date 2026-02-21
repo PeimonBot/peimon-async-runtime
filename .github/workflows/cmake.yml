@@ -110,6 +110,7 @@ jobs:
         timeout-minutes: 5
 
   # Only output ALL_TESTS_PASSED when linux, macos, and windows all pass their test steps.
+  # Job runs only when all three build+test jobs succeed (needs: [...]); otherwise job is skipped.
   all-passed:
     name: All tests passed
     needs: [build-linux, build-macos, build-windows]

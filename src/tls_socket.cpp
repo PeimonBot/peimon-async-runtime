@@ -118,7 +118,8 @@ void TlsSocket::AsyncHandshakeAwaitable::try_accept() {
     if (state_->registered)
         state_->loop->modify_fd(socket_->fd(), ev, &state_->callback);
     else {
-        state_->loop->register_fd(socket_->fd(), ev, &state_->callback);
+        state_->loop->register_fd(socket_->fd(), ev, &state_->callback,
+                                 std::shared_ptr<void>(state_));
         state_->registered = true;
     }
 }
@@ -172,7 +173,8 @@ void TlsSocket::AsyncReadAwaitable::try_read() {
     if (state_->registered)
         state_->loop->modify_fd(socket_->fd(), ev, &state_->callback);
     else {
-        state_->loop->register_fd(socket_->fd(), ev, &state_->callback);
+        state_->loop->register_fd(socket_->fd(), ev, &state_->callback,
+                                 std::shared_ptr<void>(state_));
         state_->registered = true;
     }
 }
@@ -228,7 +230,8 @@ void TlsSocket::AsyncWriteAwaitable::try_write() {
     if (state_->registered)
         state_->loop->modify_fd(socket_->fd(), ev, &state_->callback);
     else {
-        state_->loop->register_fd(socket_->fd(), ev, &state_->callback);
+        state_->loop->register_fd(socket_->fd(), ev, &state_->callback,
+                                 std::shared_ptr<void>(state_));
         state_->registered = true;
     }
 }

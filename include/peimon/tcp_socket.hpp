@@ -141,7 +141,8 @@ public:
 #endif
             s->handle.resume();
         };
-        loop_->register_fd(listener_->fd(), PollEvent::Read, &state_->callback);
+        loop_->register_fd(listener_->fd(), PollEvent::Read, &state_->callback,
+                          std::shared_ptr<void>(state_));
     }
 
     TcpSocket await_resume() {
@@ -228,7 +229,8 @@ public:
 #endif
             s->handle.resume();
         };
-        loop_->register_fd(socket_->fd(), PollEvent::Write, &state_->callback);
+        loop_->register_fd(socket_->fd(), PollEvent::Write, &state_->callback,
+                          std::shared_ptr<void>(state_));
     }
 
     std::error_code await_resume() {
@@ -285,7 +287,8 @@ public:
 #endif
             s->handle.resume();
         };
-        loop_->register_fd(socket_->fd(), PollEvent::Read, &state_->callback);
+        loop_->register_fd(socket_->fd(), PollEvent::Read, &state_->callback,
+                          std::shared_ptr<void>(state_));
     }
 
     std::ptrdiff_t await_resume() { return state_ ? state_->result : 0; }
@@ -342,7 +345,8 @@ public:
 #endif
             s->handle.resume();
         };
-        loop_->register_fd(socket_->fd(), PollEvent::Write, &state_->callback);
+        loop_->register_fd(socket_->fd(), PollEvent::Write, &state_->callback,
+                          std::shared_ptr<void>(state_));
     }
 
     std::ptrdiff_t await_resume() { return state_ ? state_->result : 0; }

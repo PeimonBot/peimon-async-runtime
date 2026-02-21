@@ -1009,7 +1009,8 @@ void run_http3_server(EventLoop& loop,
     }
 
     state->socket.set_event_loop(&loop);
-    loop.register_fd(state->socket.fd(), PollEvent::Read, &state->callback);
+    loop.register_fd(state->socket.fd(), PollEvent::Read, &state->callback,
+                    std::shared_ptr<void>(state));
     g_http3_servers.push_back(state);
     std::cout << "HTTP/3 (QUIC) server listening on " << (host ? host : "0.0.0.0") << ":" << port
               << " (ngtcp2 + nghttp3, Hello World)." << std::endl;

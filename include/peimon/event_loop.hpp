@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <unordered_map>
 #include <vector>
 
 namespace peimon {
@@ -69,7 +70,10 @@ public:
     void run_in_loop(Callback cb);
     void queue_in_loop(Callback cb);
 
-    void register_fd(poll_fd_t fd, PollEvent events, void* user_data);
+    /// Register fd for I/O events. keep_alive (if non-null) is held during callback dispatch
+    /// to prevent use-after-free when one callback destroys another's state (e.g. on macOS kqueue).
+    void register_fd(poll_fd_t fd, PollEvent events, void* user_data,
+                     std::shared_ptr<void> keep_alive = nullptr);
     void unregister_fd(poll_fd_t fd);
     void modify_fd(poll_fd_t fd, PollEvent events, void* user_data);
 
@@ -88,6 +92,7 @@ private:
     void do_pending_callbacks();
 
     std::unique_ptr<IPoller> poller_;
+    std::unordered_map<poll_fd_t, std::shared_ptr<void>> fd_keep_alive_;
     bool running_{false};
     std::vector<Callback> pending_callbacks_;
     std::mutex pending_mutex_;

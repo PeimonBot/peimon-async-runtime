@@ -111,6 +111,8 @@ public:
         ctx->event = WSACreateEvent();
         if (ctx->event == WSA_INVALID_EVENT) throw std::runtime_error("WSACreateEvent failed");
 
+        // WSAEventSelect associates socket with our event; bridge_events_to_iocp waits on
+        // these events and posts to IOCP so the main thread's wait() consumes them.
         const SOCKET s = static_cast<SOCKET>(fd);
         if (WSAEventSelect(s, ctx->event, to_network_event_mask(events)) == SOCKET_ERROR) {
             WSACloseEvent(ctx->event);
@@ -168,6 +170,8 @@ public:
             const DWORD wait_ms = first_wait ? timeout : 0;
             first_wait = false;
 
+            // Drain IOCP: first call uses caller's timeout; subsequent calls non-blocking
+            // so we consume all queued socket events without hanging.
             const BOOL ok = GetQueuedCompletionStatus(iocp_, &bytes, &key, &ov, wait_ms);
             if (!ok && ov == nullptr) {
                 const DWORD err = GetLastError();

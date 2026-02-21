@@ -20,6 +20,8 @@ public:
         if (kq_ >= 0) close(kq_);
     }
 
+    // user_data must remain valid until remove(fd). EventLoop holds keep_alive during
+    // callback dispatch so one callback cannot free another's state (macOS/kqueue safety).
     void add(poll_fd_t fd, PollEvent events, void* user_data) override {
         struct kevent ev[2];
         int n = 0;

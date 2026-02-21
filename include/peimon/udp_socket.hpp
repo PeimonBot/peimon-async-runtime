@@ -102,7 +102,8 @@ public:
             }
             s->handle.resume();
         };
-        loop_->register_fd(socket_->fd(), PollEvent::Read, &state_->callback);
+        loop_->register_fd(socket_->fd(), PollEvent::Read, &state_->callback,
+                          std::shared_ptr<void>(state_));
     }
 
     UdpRecvResult await_resume() {
@@ -166,7 +167,8 @@ public:
 #endif
             s->handle.resume();
         };
-        loop_->register_fd(socket_->fd(), PollEvent::Write, &state_->callback);
+        loop_->register_fd(socket_->fd(), PollEvent::Write, &state_->callback,
+                          std::shared_ptr<void>(state_));
     }
 
     std::ptrdiff_t await_resume() { return state_ ? state_->result : -1; }
