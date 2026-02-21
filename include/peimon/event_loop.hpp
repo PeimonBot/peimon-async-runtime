@@ -79,6 +79,9 @@ public:
 private:
     void run_expired_timers();
     int next_timer_timeout_ms() const;
+#if defined(__linux__)
+    void update_timerfd();
+#endif
 
     void wakeup();
     void handle_wakeup();
@@ -89,6 +92,9 @@ private:
     std::vector<Callback> pending_callbacks_;
     std::mutex pending_mutex_;
     poll_fd_t wakeup_fds_[2]{static_cast<poll_fd_t>(-1), static_cast<poll_fd_t>(-1)};
+#if defined(__linux__)
+    poll_fd_t timerfd_{static_cast<poll_fd_t>(-1)};
+#endif
 
     using Clock = std::chrono::steady_clock;
     using TimePoint = Clock::time_point;
@@ -110,6 +116,9 @@ void EventLoop::run_after(std::chrono::duration<Rep, Period> delay, Callback cb)
         timer_queue_.push(TimerEntry{when, std::move(cb)});
     }
     wakeup();
+#if defined(__linux__)
+    if (timerfd_ >= 0) update_timerfd();
+#endif
 }
 
 }  // namespace peimon
